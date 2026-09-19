@@ -1,0 +1,45 @@
+# ROM images are not distributed.  Supply your own MAME bzone set.
+roms/
+disasm/_survey/roms_extracted/
+disasm/build/
+
+# Atari's source archives (github.com/historicalsource) are not distributed
+# either; the listings recovered from them are.  Local copies here let the
+# tools that read them run again.
+battlezone-main/
+red-baron-main/
+
+# The Space Duel repo this folder was cloned from, moved aside
+.git_spaceduel_backup/
+
+# Local material kept beside the repo.  Not part of the published project.
+local/
+
+# Python
+__pycache__/
+*.pyc
+
+# Local development records, not part of the published project
+docs/superpowers/
+.claude/
+
+# C port build output
+c_src/obj/
+emu_src/obj/
+*.exe
+!c_src/bz_win.exe
+!emu_src/bz_emu.exe
+*.obj
+*.pdb
+*.ilk
+*.log
+*.out
+*.log.bak
+
+# The hosts' runtime output.  bz_win.ini and bz_win.exe are the published
+# defaults and build.  The six MAME sample WAVs the programs play are
+# shipped (c_src\samples\ for the C port, emu_src\samples\ for the
+# emulator); the .SAM originals and the 80s Classics set are not.
+c_src/*.nv
+c_src/samples/*.SAM
+SAMPLES2/

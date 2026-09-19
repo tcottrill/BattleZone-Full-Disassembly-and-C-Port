@@ -1,0 +1,121 @@
+# Descriptions for aliases Atari's source leaves uncommented, for bzone_defines.asm
+# (disasm/emit_defines.py).  NAME<TAB>description; '#' lines are comments.  Applied
+# only where the source has no comment of its own (emit_defines.py warns and ignores
+# the note otherwise); shown in the listing tagged [note].
+#
+# ---- RAM: paired/second half of a table or coordinate Atari commented once ----
+TEMP2	General-purpose scratch word, paired with TEMP1/TEMP3 (used throughout as temporary storage for one routine at a time, not tied to a single purpose)
+TEMP3	General-purpose scratch word, paired with TEMP1/TEMP2
+X1	Scratch X coordinate used by M_SET/M_FOR/M_REV (per-tick motion vector), R_37S_, BUZBOM and ROB1 for a temporary point; X2/Y1/Y2 are the rest of the pair(s) (not used by ROTPNT or D_SPCL, despite their own comments naming a similarly-purposed pair)
+X2	Second scratch X coordinate, paired with Y2; also ROTPNT's raw (non-absolute) X/Y-matrix values (see X1)
+Y1	Scratch Y coordinate, pairs with X1 in M_SET/M_FOR/M_REV etc.; also holds ROTPNT's absolute-value Y (ROTPNT_10, compared against X2) (see X1)
+Y2	Second scratch Y coordinate, paired with X2 (see X1)
+SHELLX	Shell X position, 4 bytes: tank's shell at SHELLX/+1, robot/buzz-bomber's at SHELLX+2/+3 (indexed SHELLX,X, X=0/2); the comment on GARBAG above, "X & Y OF SHELL POSITIONS", describes this cell and SHELLY
+SHELLY	Shell Y position, 4 bytes: tank/robot pair as SHELLX (see SHELLX)
+SINCY	Shell Y velocity increment, 4 bytes: tank/robot pair as SHELLX (see SHELLX); SINCX's comment "X & Y SHELL INCREMENTS" describes this cell too
+OTPOSY	Saved old Y position for backing the tank/robot out of a collision (SAVEIT/BAKOUT), pairs with OTPOSX
+SAPOSY	Saucer Y position (2 bytes); SAPOSX's comment "SAUCER POSITION" describes this cell too
+SAINCY	Saucer Y motion increment (2 bytes); SAINCX's comment "SAUCCR MOTION INCREMENTS" describes this cell too
+S_PSTSL	COIN65's post-coin slam timers, one byte per coin mechanism (MECHS=3): a slam within this window invalidates the coin (documented in TC65.MAC's own header comments)
+S_CNSTT	COIN65's coin-status/detection timers, one byte per coin mechanism (MECHS=3): two counters packed in one byte for debounced coin-switch detection (documented in TC65.MAC's own header comments)
+S_LMTIM	COIN65's pre-coin slam-protection timer (1 byte): nonzero if the slam switch tripped within the last PRST*4 frames, which blocks coin input during that window (documented in TC65.MAC's own $LMTIM header comment)
+S_CMODE	COIN65's coin-option-switch byte, copied from OPTON2 for the coin routine to read from zero page
+S_BCCNT	COIN65's count of coins toward a bonus coin; cleared at power-on and game start
+PTBLY2	Y coordinates of the rotated/translated object table (2 bytes per object), pairs with PTBLX2
+PTBLO2	Per-object type/orientation byte of the rotated/translated object table (PTBLX2/PTBLY2); read by DRAW/D_SBRT/D_SPCL to pick brightness and picture
+EXPOSY	Y coordinates of the explosion-piece table (2 bytes per piece), pairs with EXPOSX
+EXPOSO	Per-piece orientation/spin byte for an exploding object, updated by the explosion physics loop alongside ZVELOC; copied to PTBLO2+1 to draw each piece via DRAW's D_SPCL/D_SBRT commands
+TDIST	Distance (high byte) from the tank to the robot, computed by DRADAR (radar display) via the Mathbox square root; read by FIREIT/ROBOT and by BUZBOM for close-range checks
+LETR	Index (0-2) of the initials letter being entered on the high-score screen; advanced by the fire button (see LETCHK/HISCRE)
+OLSTAT	Previous-frame ALLPOT switch reading, for edge-detecting the fire button while entering high-score initials (paired with NWSTAT)
+OLDRND	Previous POKEY random byte, XORed into the next one in ROBCHK to make its dice roll less predictable
+XSPD	Per-rock (NOROCK=5) X speed, one byte per rock; part of the volcano rock-movement arrays with OBJTIM/YSPD/XPOSL/XPOSH/YPOSL/YPOSH (see VOLCNO)
+YSPD	Per-rock Y speed, one byte per rock (see XSPD)
+XPOSL	Low byte of each rock's X position, one byte per rock; XPOSH is the parallel high-byte array (positions are stored as two separate byte arrays, not interleaved words)
+XPOSH	High byte of each rock's X position, one byte per rock (see XPOSL)
+YPOSL	Low byte of each rock's Y position, one byte per rock (see XPOSL)
+YPOSH	High byte of each rock's Y position, one byte per rock (see XPOSL)
+#
+# ---- Constants: COIN65 (TC65.MAC) configuration equates set before .INCLUDE TC65 ----
+# (documented in TC65.MAC's own "DEFAULT ASSIGNMENTS" / "EXPLANATION" header comments)
+CNTINT	COIN65 config: count interrupts into $INTCT (0 = off; this game leaves it off)
+COIN	COIN65 config: coin-switch polarity (0 = coin input is low-true)
+COIN01	COIN65 config: whether the coin switches are wired into bits D0/D1 of the input byte (this game sets it to 1)
+EMCTRS	COIN65 config: number of electro-mechanical coin counters (3); sizes $CCTIM
+INCLUDE	COIN65 config: this copy is .INCLUDEd into BZONE.MAC (suppresses COIN65's own .END)
+SLAM	COIN65 config: slam-switch polarity (0 = slam input is low-true; COIN65's own default is high-true)
+MECHS	COIN65 config: number of coin mechanisms (3); sizes $CNSTT and $PSTSL
+S_LMBIT	COIN65 config: bit mask (bit 3) selecting which bit of the slam-switch byte ($COINA/$LAM = IN0) is the slam signal
+BONADD	COIN65 config: enable the bonus-adder coin feature (1 = on)
+#
+# ---- Constants: BZONE.MAC's own page-0 equates ----
+NPTS	Number of points in PNTTBL (26.); PNTTBL is <NPTS*4> bytes (X,Y per point, 2 bytes each)
+EOZP	"End of zero page" marker (the BSECT location counter after VTIMER, = $EE); not itself a variable
+NOBJ	Number of playfield objects (28.) in the rotated/translated object table (PTBLX2/PTBLY2/PTBLO2)
+EXNOBJ	Number of explosion pieces (8) in the explosion object table (EXPOSX/EXPOSY/EXPOSO/ZVELOC/EXPOSZ)
+HSCNUM	Number of high-score table entries (10.)
+NOROCK	Number of volcano rocks animated at once (5); sizes OBJTIM/XSPD/YSPD/XPOSL/XPOSH/YPOSL/YPOSH
+HDIV	Value (1) - declared but not referenced by name anywhere in this source
+ST_BIT	Self-test switch bit mask ($10) within $COINA/HALT (IN0)
+LIDLE	Engine idle-sound selector value (0) stored to TEMP1/SNDWRD by MOTION when the tank is stopped
+HIDLE	Engine running-sound selector value ($10), the alternative to LIDLE
+EXPLOD	Value (1) - declared but not referenced by name anywhere in this source
+HIX	AND mask ($FD) - complement of LOX: clears the soft-shell sound-selector bit in SNDWRD (see LOX)
+LOX	OR mask ($02) used to select the soft/quiet shell-explosion sound in SNDWRD
+LOUDSH	OR mask ($08) used to select the loud shell-explosion sound in SNDWRD
+SOFTSH	AND mask ($F7) - complement of LOUDSH, clears the loud-shell sound bit
+LAMP	Bit mask ($20) - unused elsewhere in this source (declared but not referenced by name)
+TNKPRX	Value ($38) - declared but not referenced by name anywhere in this source
+CENTRX	Screen-centre X constant (0)
+CENTRY	Screen-centre Y constant (316.), used by DRADAR to centre the radar sweep
+GRAVTY	Per-frame Z-velocity decrement for falling explosion pieces (-4.), added to ZVELOC
+TOP	Z-height threshold ($200) above which a rock/robot is considered too high (volcano/robot Z checks)
+SWOOP	Value ($100) - unused elsewhere in this source (declared but not referenced by name; its name suggests a buzz-bomber swoop altitude, but nothing in the code confirms that)
+START	Bit mask ($20) for the start-button bit read from ALLPOT
+COMAND	Value ($20, same as START) - unused elsewhere in this source (declared but not referenced by name)
+COPYRT	Vector-message index constant used to select the copyright message text
+S_STAT	Mathbox-diagnostic config equate for the included MBDIAG test (set before .INCLUDE MBDIAG in BZSTST)
+#
+# ---- Constants: BZSOUN.MAC ----
+SNOSND	SNDWRD/SNDON sound-selector bit for "no sound" (0)
+RBEEP	SNDWRD/SNDON sound-selector bit for the radar-sweep beep (1)
+BOING	SNDWRD/SNDON sound-selector bit for the collision "boing" (2)
+BLKSND	SNDWRD/SNDON sound-selector bit for the crack/damage sound (4)
+BONER	SNDWRD/SNDON sound-selector bit for the wrong-move/error sound (8)
+WARNG	SNDWRD/SNDON sound-selector bit for the warning sound ($10)
+DISINT	SNDWRD/SNDON sound-selector bit for disintegration/explosion ($20)
+SAUSND	SNDWRD/SNDON sound-selector bit for the saucer sound ($40)
+SUPBON	SNDWRD/SNDON sound-selector bit for the super-bonus tune ($80)
+PTLEN	Bound used by SNDON's bit-to-table-index check (CPY I,PTLEN+7) against the PNTRS sound-pointer table
+#
+# ---- Constants: BZSTST.MAC ----
+VGROM	Vector ROM base address ($3000), used by STEST3's ROM checksum loop
+# PRGROM ($5000, the program-ROM base BZSTST's checksum loop switches to after VGROM) shares its
+# address with BZONE's MAIN entry point, so it gets a ".alias" line in the listing itself, not here.
+#
+# ---- Constants: BZONE.MAC's ENGMSG message-index constants (ASCVH macro, DATA STRUCTURES) ----
+# Each name is that message's index (2, 4, 6, ...) into the language message tables
+# (ENGMSG/GRMMSG/FRNMSG/SPNMSG, see MSGS); the text is Atari's own vector-message string.
+ETO	Message index for "ENEMY TO " (ETOMSG, the radar direction-to-enemy prefix; see LEFT/RIGHT/REAR)
+LEFT	Message index for "LEFT" (radar direction suffix)
+RIGHT	Message index for "RIGHT" (radar direction suffix)
+REAR	Message index for "REAR" (radar direction suffix)
+LINE2	Message index for "ENTER YOUR INITIALS"
+LINE3	Message index for "CHANGE LETTER WITH RIGHT HAND CONTROLLER"
+LINE4	Message index for "SELECT LETTER WITH FIRE BUTTON"
+CHISCR	Message index for "HIGH SCORE      000"
+ERANGE	Message index for "ENEMY IN RANGE"
+BLOCKD	Message index for "MOTION BLOCKED BY OBJECT"
+GAMOVR	Message index for "GAME OVER"
+PRSTRT	Message index for "PRESS START"
+YSCORE	Message index for "SCORE     000"
+HISCOR	Message index for "HIGH SCORES"
+ZEROS	Message index for "000 " (blank score digits)
+LINE1	Message index for "GREAT SCORE"
+MODE1	Message index for coin mode 1's message, "1       2     S"
+CONPLY	Message index for coin mode 4's message, "  COIN    PLAY"
+INSCON	Message index for "INSERT COIN"
+BONPLN	Message index for "BONUS TANK AT "
+BONPL1	Message index for "000 AND 100000"
+# ENDZON (ZONTBL's end-of-table marker; only its address is used, as ENDZON-ZONTBL) shares its
+# address with the start of BZSOUN, so it gets a ".alias" line in the listing itself, not here.

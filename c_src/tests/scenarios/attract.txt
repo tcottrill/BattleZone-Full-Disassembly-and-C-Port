@@ -1,0 +1,13 @@
+# attract.txt - Battlezone oracle scenario: no coins, no input, attract mode
+# only.  This is the same set of conditions refrun.exe already runs under
+# with no --script at all (IN0 self-test idle = off/normal play, no coin/
+# fire/start switches touched) - it exists as an explicit, named scenario so
+# later milestones (lockstep, Gate 1/N equivalents) have a stable script to
+# point at, per PLAN.md M0 deliverable 8.
+#
+# Syntax: "PASS PORT [VALUE]", '#' comments, non-decreasing PASS order - see
+# the header of tests/refrun.c.
+
+# Nothing to do: IN0 idles with the self-test switch off (normal play; board
+# default, bzone.cpp PORT_DIPSETTING(0x10,Off)), no coins, no tread/fire/
+# start switches.  Run to --frames untouched (no active lines below).

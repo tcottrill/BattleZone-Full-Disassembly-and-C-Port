@@ -1,0 +1,29 @@
+# play_long.txt - a real game with long stretches of no input, so the enemy's
+# whole decision tree (ROBOT/R_EVAD/R_ATCK/R_RAND, FIREIT) runs: coin, start,
+# sit, turn, drive, reverse, fire.  Added 2026-09-18 for cycle counting (the
+# enemy-backs-away bug: TRANSLATING.md "Cycle counting").
+5  coin1 1
+8  coin1 0
+20 start1 1
+23 start1 0
+# sit still a long time (enemy should close in and shoot)
+600 rt_up 1
+660 rt_up 0
+700 fire 1
+704 fire 0
+900 lt_up 1
+900 rt_up 1
+1000 lt_up 0
+1000 rt_up 0
+1100 fire 1
+1104 fire 0
+1500 lt_up 1
+1560 lt_up 0
+1600 fire 1
+1604 fire 0
+2200 rt_down 1
+2200 lt_down 1
+2300 rt_down 0
+2300 lt_down 0
+2400 fire 1
+2404 fire 0

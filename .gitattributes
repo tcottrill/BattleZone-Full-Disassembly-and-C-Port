@@ -1,0 +1,8 @@
+# Text files are normalised to LF in the repository and checked out in
+# the platform's native line endings; the generated listings included.
+* text=auto
+
+# Never normalise these.
+*.zip binary
+*.bin binary
+*.png binary

@@ -1,0 +1,7994 @@
+;Battlezone (Atari, 1980) - annotated disassembly of the program ROM $5000-$7FFF.
+;MAME 'bzone'/'bzonea' (136014-01/-02 + 136013..136009).  Reconstructed by
+;re-assembling Atari's own source (the BZONE.COM link: BZMTNS BZONE BZSOUN VGUT
+;BZSTST, with TC65/COIN65, VGMC, VGAN, ASCVG and COND65/HLL65 included) byte-exact
+;with disasm/macasm.py, so names and upper-case comments are Atari's.  Routine
+;header descriptions come from the source (.SBTTL / label comment / comment block),
+;else were written for this disassembly (tagged [note]).
+;Every line below was re-encoded and byte-compared with the ROM (verify.py);
+;gen_from_roms.py --check round-trips it with ca65/ld65.
+;Syntax: Ophis style (.alias, .byte, .word); [ ] groups expressions, which Atari's
+;MAC65 evaluated strictly left to right; ~ is one's complement, | is OR.
+;The 6502 only decodes 15 address bits: $8000-$FFFF mirrors $0000-$7FFF exactly
+;(RAM, hardware registers, vector RAM/ROM and this program ROM alike), so the CPU
+;vectors read at $FFFA-$FFFF are the .VCTRS words at $7FFA below (see the end of
+;the file).
+
+.org $5000
+
+.include "bzone_defines.asm"
+
+
+;BZSTST labels at its end address $5000 (no data of their own):
+.alias PRGROM           $5000
+
+;==============================================================================
+; MODULE BZONE   BZONE.MAC
+;   Main game module: page-0 variables, the main (vector-sync) loop, the logo,
+;   high score table, IRQ handler, mountain/volcano drawing, 3-D
+;   translate/rotate, explosions, object projection, collision checks,
+;   tank/robot/buzz-bomber/saucer motion and AI, radar, messages and
+;   information display; the coin routine (TC65, Atari's generic
+;   COIN65/MOOLAH) and the alphanumeric vector-character macros (ASCVG) are
+;   included here.
+;==============================================================================
+
+;------------------------------------------------------------------------------
+; MAIN - MAIN LOOP
+;------------------------------------------------------------------------------
+MAIN:
+L5000:  LSR  SYNC                   ;S SYNC UP
+L5002:  BCC  MAIN
+L5004:  JSR  VOLCNO
+
+MAIN_5:
+L5007:  LDX  BUFRDY                 ;S USE AVAILABLE BUFFER
+L5009:  BEQ  MAIN_5
+L500B:  LDA  #[VECRAM&$FF]+2
+L500D:  STA  VGLIST
+L500F:  STX  VGLIST+1
+L5011:  LDA  #$01
+L5013:  JSR  VGSCA1                 ;C SET SCALING
+L5016:  JSR  VGCNTR
+L5019:  LDA  #$81                   ;C SET LOWER WINDOW
+L501B:  TAX
+L501C:  LDY  #$00
+L501E:  JSR  VGVTR
+L5021:  LDA  #$00
+L5023:  JSR  VGSTAT
+L5026:  INC  FRAME
+L5028:  BNE  MAIN_6
+L502A:  INC  TIMOUT
+L502C:  LDA  TIMOUT
+L502E:  CMP  #$04
+
+MAIN_6:
+L5030:  BIT  GOVER
+L5032:  BPL  MAIN_1
+L5034:  JSR  BIGWND
+L5037:  JMP  HISCRE
+
+MAIN_1:
+L503A:  BIT  ATRACT
+L503C:  BMI  MAIN_3
+L503E:  LDA  CRACK                  ;ALLOW ENDING SEQUENCE TO FINISH
+L5040:  BNE  MAIN_3
+L5042:  BCC  MAIN_10
+L5044:  JSR  TANKCK
+L5047:  LDX  #$03
+L5049:  LDA  DSPLAY
+L504C:  EOR  #$80
+L504E:  STA  DSPLAY
+L5051:  STX  TIMOUT
+L5053:  STA  FRAME
+L5055:  BMI  MAIN_10                ;D IF GOING INTO DISPLAY
+L5057:  BIT  ATRACT                 ;C CLOSE WINDOW
+L5059:  BMI  MAIN_15
+L505B:  LDA  #$FF                   ;C SET UP FOR LOGO
+L505D:  STA  LOGO
+
+MAIN_10:
+L5060:  BIT  DSPLAY
+L5063:  BPL  MAIN_15
+L5065:  JSR  BIGWND
+L5068:  JMP  DISTBL
+
+MAIN_3:
+L506B:  BCC  MAIN_15
+L506D:  BIT  R2D3FL
+L506F:  BMI  MAIN_15
+L5071:  JSR  R2D3CK
+
+MAIN_15:
+L5074:  JSR  VGCNTR                 ;C SET UPPER WINDOW
+L5077:  LDA  #$7F
+L5079:  LDX  #$30
+L507B:  LDY  #$00
+L507D:  JSR  VGVTR
+L5080:  LDA  #$02
+L5082:  JSR  VGSTAT
+L5085:  BIT  ATRACT                 ;D IF GAME
+L5087:  BMI  MAIN_16
+L5089:  LDX  #COPYRT                ;C COPYRIGHT 1980
+L508B:  JSR  MSGS
+
+MAIN_16:
+L508E:  JSR  MOUNTS                 ;C DRAW MOUNTAINS & HORIZON
+L5091:  DEC  ACTION
+L5093:  LDA  FTIMER
+L5095:  CMP  #$FF
+L5097:  BEQ  MAIN_18
+L5099:  INC  FTIMER
+
+MAIN_18:
+L509B:  LDA  #$0A                   ;C INIT DIVIDER
+L509D:  STA  DIVCYC
+L50A0:  LDA  #$00                   ;C INIT INDEX
+L50A2:  STA  SAVE0
+L50A4:  JSR  ROTATE                 ;C CHOOSE OBJECTS IN VIEW
+L50A7:  JSR  BATTLE
+
+MAIN_20:
+L50AA:  LDX  SAVE0                  ;C NEXT TABLE VALUE
+L50AC:  LDA  PTBLO2,X               ;D IF END OF TABLE
+L50AF:  BMI  MAIN_30
+L50B1:  JSR  PNTPUT
+L50B4:  LDX  SAVE0                  ;C GET OBJECT # IN A
+L50B6:  LDA  PTBLO2,X
+L50B9:  JSR  DRAW                   ;C GENERATE VECTOR INSTRUCTIONS
+L50BC:  INC  SAVE0                  ;C NEXT OBJECT
+L50BE:  INC  SAVE0
+L50C0:  BNE  MAIN_20
+
+MAIN_30:
+L50C2:  LDA  CRACK
+L50C4:  BEQ  MAIN_31
+L50C6:  JMP  WNSHLD
+
+MAIN_31:
+L50C9:  JSR  BIGWND                 ;C OPEN WINDOW
+L50CC:  JSR  DRADAR
+
+MAIN_35:
+L50CF:  JSR  TRACK                  ;D IF ROBOT IN SIGHTS
+L50D2:  EOR  #$80
+L50D4:  SEC
+L50D5:  SBC  TANGLE
+L50D7:  STA  SAVE2
+L50D9:  BPL  MAIN_41
+L50DB:  CLC
+L50DC:  EOR  #$FF
+L50DE:  ADC  #$01
+
+MAIN_41:
+L50E0:  STA  PTURN
+L50E2:  BIT  LOGO
+L50E5:  BMI  MAIN_50
+L50E7:  CMP  #$02
+L50E9:  LDA  FIRECT
+L50EB:  BEQ  MAIN_42
+L50ED:  LDA  #$20
+L50EF:  AND  S_INTCT
+L50F1:  BEQ  MAIN_50
+
+MAIN_42:
+L50F3:  BCC  MAIN_45
+
+MAIN_43:
+L50F5:  LDX  #<XCROSS               ;LXL XCROSS
+L50F7:  LDA  #>XCROSS               ;LAH XCROSS
+L50F9:  BNE  MAIN_48                ;B
+
+MAIN_45:
+L50FB:  LDX  #<XCROS1               ;LXL XCROS1
+L50FD:  LDA  #>XCROS1               ;LAH XCROS1
+
+MAIN_48:
+L50FF:  JSR  VGJSRL
+
+MAIN_50:
+L5102:  LDA  COLFLG+2
+L5104:  BNE  MAIN_53
+L5106:  BIT  ATRACT                 ;D IF NOT ATTRACT
+L5108:  BMI  MAIN_51
+L510A:  LDA  VGLIST+1               ;C SECURITY
+L510C:  AND  #$F8
+L510E:  STA  TBLPTR+1
+L5110:  LDA  #$02
+L5112:  STA  TBLPTR
+L5114:  LDY  #$35
+L5116:  LDA  #$00
+
+MAIN_99:
+L5118:  EOR  (TBLPTR),Y
+L511A:  DEY
+L511B:  BPL  MAIN_99
+L511D:  LSR
+L511E:  STA  TRAP2
+L5121:  BIT  LOGO                   ;D IF SHOWING LOGO
+L5124:  BMI  B_END
+
+MAIN_51:
+L5126:  LDA  #$02                   ;C FLASH MSG
+L5128:  AND  FRAME
+L512A:  BEQ  MAIN_53
+L512C:  LDA  PTURN                  ;D IF ROBOT IN VIEW
+L512E:  CMP  #$16
+L5130:  BCC  MAIN_53
+L5132:  LDX  #ETO                   ;C POINT DIRECTION
+L5134:  JSR  MSGS
+L5137:  LDX  #REAR
+L5139:  LDA  #$6B
+L513B:  CMP  PTURN
+L513D:  BCC  MAIN_52
+L513F:  LDX  #LEFT
+L5141:  BIT  SAVE2
+L5143:  BPL  MAIN_52
+L5145:  LDX  #RIGHT
+
+MAIN_52:
+L5147:  JSR  MSGS
+
+MAIN_53:
+L514A:  LDA  OBJCOL
+L514C:  BEQ  B_END
+L514E:  LDA  FRAME
+L5150:  AND  #$04
+L5152:  BNE  B_END
+L5154:  LDX  #BLOCKD
+L5156:  JSR  MSGS
+
+B_END:
+L5159:  JSR  INFO                   ;C DISPLAY STATS
+L515C:  LDA  GOVER                  ;C IF IN GAME
+L515E:  BEQ  B_END_15
+L5160:  LDA  CRACK
+L5162:  BNE  B_END_15
+L5164:  BIT  LOGO                   ;D IF LOGO
+L5167:  BMI  B_END_15
+L5169:  LDX  #GAMOVR                ;C OUTPUT GAME OVER
+L516B:  JSR  MSGS
+L516E:  LDA  S_S_CRDT               ;D IF NO COINS NEEDED
+L5170:  BNE  B_END_10
+L5172:  LDA  S_CMODE
+L5174:  AND  #$03
+L5176:  BEQ  B_END_10
+L5178:  ASL                         ;C OUTPUT COIN MODE
+L5179:  ADC  #MODE1-2
+L517B:  TAX
+L517C:  JSR  MSGS
+L517F:  LDX  #CONPLY
+L5181:  JSR  MSGS
+L5184:  LDX  #INSCON                ;C INSERT COIN
+L5186:  BNE  B_END_13
+
+B_END_10:
+L5188:  LDX  #PRSTRT
+
+B_END_13:
+L518A:  BIT  S_INTCT
+L518C:  BVC  B_END_15
+L518E:  JSR  MSGS
+
+B_END_15:
+L5191:  JSR  FINISH
+L5194:  BIT  SUPER                  ;D IF SUPER BONUS
+L5197:  BMI  B_END_30
+L5199:  LDA  #$04
+L519B:  STA  SAVE3
+
+B_END_18:
+L519D:  JSR  COLCHK                 ;C CHECK COLLISIONS
+L51A0:  JSR  SHUPDT
+L51A3:  DEC  SAVE3
+L51A5:  BNE  B_END_18
+L51A7:  BIT  R2D3FL                 ;D IF SLOW TANK, DON'T DO QWIKCK
+L51A9:  BMI  B_END_17
+L51AB:  JSR  TR7CHK
+L51AE:  BCC  B_END_19
+
+B_END_17:
+L51B0:  JSR  QWIKCK
+
+B_END_19:
+L51B3:  JSR  ROBOT
+L51B6:  JSR  SAUCMV
+L51B9:  JSR  BOUND
+L51BC:  JSR  MOTION                 ;C UPDATE TANK POSITION
+
+B_END_20:
+L51BF:  JMP  MAIN                   ;C NEXT MOVE
+
+B_END_30:
+L51C2:  LDA  TRAP2
+L51C5:  LSR
+L51C6:  ORA  POINT
+L51C8:  BNE  B_END_20
+L51CA:  STA  SUPER
+L51CD:  LDA  SNDWRD
+L51CF:  ORA  #LOX
+L51D1:  STA  SNDWRD
+L51D3:  LDA  #$FF
+L51D5:  STA  EXPCNT
+L51D7:  BNE  B_END_20
+
+;------------------------------------------------------------------------------
+; BIGWND - C OPEN WINDOW  (comment at the call)
+;------------------------------------------------------------------------------
+BIGWND:
+L51D9:  JSR  VGCNTR                 ;C SET UPPER WINDOW
+L51DC:  LDY  #$00
+L51DE:  LDA  #$7F
+L51E0:  TAX
+L51E1:  JSR  VGVTR
+L51E4:  LDA  #$02
+L51E6:  JMP  VGSTAT
+
+;------------------------------------------------------------------------------
+; WNSHLD - [note] Draw the windshield-crack overlay (CRACKS picture, one 2-word section per call) up to the
+;   CRACK counter; once at least 8 sections are drawn and CRACK has reached $2C, and no shell is
+;   in flight (FIRECT=0), clears CRACK/STATE/COLFLG/FTIMER - ends the game (attract mode) if
+;   GOVER, else respawns the robot via ROBCHK/TANKCK for another life.
+;------------------------------------------------------------------------------
+WNSHLD:
+L51E9:  LDY  #$00                   ;C INIT INDEX
+L51EB:  STY  CHAN4V
+
+WNSHLD_10:
+L51EE:  LDA  CRACKS,Y               ;C OUTPUT ONE SECTION
+L51F1:  LDX  CRACKS+1,Y
+L51F4:  STY  TEMP1
+L51F6:  JSR  VGADD2
+L51F9:  LDY  TEMP1
+L51FB:  INY
+L51FC:  INY
+L51FD:  CPY  CRACK                  ;D IF DONE
+L51FF:  BCS  WNSHLD_20
+L5201:  CPY  #$10                   ;(src: CPY I,8*2)  D IF NOT FULL PICTURE
+L5203:  BCC  WNSHLD_10
+L5205:  LDA  #$2C                   ;(src: LDA I,16*2)  D IF NOT DONE COMPLETELY
+L5207:  CMP  CRACK
+L5209:  BCS  WNSHLD_20
+L520B:  LDA  FIRECT
+L520D:  BNE  WNSHLD_18
+;LDA I,0 ;C RESET CRACK
+L520F:  STA  CRACK
+L5211:  STA  STATE
+L5213:  STA  COLFLG
+L5215:  STA  FTIMER
+L5217:  LDX  GOVER
+L5219:  BEQ  WNSHLD_13
+L521B:  STA  ATRACT                 ;C SET TO ATTRACT
+L521D:  STA  OBJCOL
+L521F:  JMP  CKSCOR
+
+WNSHLD_13:
+L5222:  LDA  #$30
+L5224:  STA  ACTION
+L5226:  LDA  PRAND                  ;C RESET POSITION
+L5229:  STA  RGOAL
+L522B:  STA  TPOSX
+L522D:  LDA  PRAND
+L5230:  STA  TPOSY
+
+WNSHLD_15:
+L5232:  LDA  PRAND
+L5235:  AND  #$3F
+L5237:  STA  TPOSX+1
+L5239:  LDA  PRAND
+L523C:  STA  TPOSY+1
+L523E:  LDX  #$00
+L5240:  JSR  OBJOBJ                 ;D IF IN COLLISION
+L5243:  BCS  WNSHLD_15
+L5245:  STX  OBJCOL                 ;C MAKE SURE NOT IN OBJECT COLLISION
+L5247:  STX  EIRNGE
+L5249:  LDA  PRAND                  ;C RESET ANGLE
+L524C:  STA  TANGLE
+L524E:  BIT  R2D3FL                 ;D IF BLOWN UP BY TANK
+L5250:  BPL  WNSHLD_17
+L5252:  JSR  TANKCK
+L5255:  JMP  B_END                  ;C INSURE TANK
+
+WNSHLD_17:
+L5258:  LDA  COLFLG+2               ;D IF OTHER TANK NOT BLOWN UP
+L525A:  BNE  WNSHLD_18
+L525C:  JSR  ROBCHK                 ;C MOVE TANK IN FRONT OF HIM
+
+WNSHLD_18:
+L525F:  JMP  B_END                  ;B
+
+WNSHLD_20:
+L5262:  INC  CRACK                  ;C INCREMENT CRACK
+L5264:  INC  CRACK
+L5266:  BNE  WNSHLD_18              ;B
+
+;------------------------------------------------------------------------------
+; BATTLE - BATTLE ZONE LOGO
+;   BLOCK NAME: BATTLE
+;   BLOCK DESCRIPTION: HANDLE LOGO DISPLAY
+;   REGISTERS A,X,Y
+;------------------------------------------------------------------------------
+BATTLE:
+L5268:  BIT  ATRACT
+L526A:  BMI  BATTLE_5
+L526C:  LDA  VGLIST+1
+L526E:  AND  #$F8
+L5270:  STA  TBLPTR+1
+L5272:  LDA  #$02
+L5274:  STA  TBLPTR
+L5276:  LDY  #$35
+L5278:  LDA  #$00
+L527A:  SEC
+
+BATTLE_99:
+L527B:  SBC  (TBLPTR),Y
+L527D:  DEY
+L527E:  BPL  BATTLE_99
+L5280:  SEC
+L5281:  SBC  OBJTBL+$21
+L5284:  STA  TRAP1
+L5287:  BIT  LOGO                   ;D IF LOGO
+L528A:  BMI  BATTLE_10
+
+BATTLE_5:
+L528C:  RTS
+
+BATTLE_10:
+L528D:  LDA  LOGOZ+1                ;D IF DONE WITH SEQUENCE
+L5290:  BMI  BATTLE_13
+L5292:  CMP  #$02
+L5294:  BCC  BATTLE_13
+L5296:  JMP  BATINT
+
+BATTLE_13:
+L5299:  LDX  #$00                   ;C FIND NEX SPOT IN TABLE
+
+BATTLE_15:
+L529B:  LDA  PTBLO2,X
+L529E:  BMI  BATTLE_20
+L52A0:  INX
+L52A1:  INX
+L52A2:  BNE  BATTLE_15
+
+BATTLE_20:
+L52A4:  LDA  #$F0                   ;C SET BRITENESS
+L52A6:  STA  SINT
+L52A9:  LDY  #$00
+
+BATTLE_22:
+L52AB:  LDA  LOGOBJ,Y               ;C SET UP OBJ #,X,Y
+L52AE:  STA  PTBLO2,X
+L52B1:  LDA  LOGOX
+L52B4:  STA  PTBLX2,X
+L52B7:  LDA  #$00
+L52B9:  STA  PTBLY2,X
+L52BC:  INX
+L52BD:  INY
+L52BE:  LDA  TANGLE                 ;USE TANKS ANGLE
+L52C0:  STA  PTBLO2,X
+L52C3:  LDA  LOGOX+1
+L52C6:  STA  PTBLX2,X
+L52C9:  LDA  #$00
+L52CB:  STA  PTBLY2,X
+L52CE:  INX
+L52CF:  INY
+L52D0:  LDA  LOGOZ+1                ;D THE ULTIMATE KLUDGE, IF LOGO HIGH
+L52D3:  BPL  BATTLE_90              ;ENOUGH TO BRING OUT "ZONE"
+L52D5:  CMP  #$FD
+L52D7:  BCS  BATTLE_90
+L52D9:  LDA  LOGOZ
+L52DC:  CMP  #$B0
+L52DE:  BCS  BATTLE_90
+L52E0:  CPY  #$03                   ;DON'T DRAW "ZONE" UNTIL WE HAVE
+L52E2:  JMP  BATTLE_95              ;ENOUGH TIME
+
+BATTLE_90:
+L52E5:  CPY  #$05
+
+BATTLE_95:
+L52E7:  BCC  BATTLE_22
+L52E9:  LDA  LOGOZ                  ;C SET UP Z
+L52EC:  LDY  LOGOZ+1
+L52EF:  STA  EXPOSZ+$C
+L52F2:  STY  EXPOSZ+$D
+L52F5:  STA  EXPOSZ+$E
+L52F8:  STY  EXPOSZ+$F
+L52FB:  CLC                         ;C UPDATE Z
+L52FC:  ADC  #$08
+L52FE:  STA  LOGOZ
+L5301:  BCC  BATTLE_25
+L5303:  INY
+
+BATTLE_25:
+L5304:  STY  LOGOZ+1
+L5307:  CLC
+L5308:  LDY  LOGOX+1                ;C UPDATE DISTANCE
+L530B:  LDA  LOGOX
+L530E:  ADC  #$40
+L5310:  STA  LOGOX
+L5313:  BCC  BATTLE_30
+L5315:  INY
+
+BATTLE_30:
+L5316:  STY  LOGOX+1
+L5319:  LDA  #$FF                   ;C END TABLE
+L531B:  STA  PTBLO2,X
+L531E:  RTS
+
+;------------------------------------------------------------------------------
+; BATINT - C INIT FOR LOGO  (comment at the call)
+;------------------------------------------------------------------------------
+BATINT:
+L531F:  LDA  #$FC                   ;C INIT POSITION
+L5321:  STA  LOGOZ+1
+L5324:  LDA  #$00
+L5326:  STA  LOGOX
+L5329:  STA  LOGOZ
+L532C:  STA  LOGO
+L532F:  LDA  #$04
+L5331:  STA  LOGOX+1
+L5334:  LDA  #$03                   ;C TEMPORARY
+L5336:  STA  TIMOUT
+L5338:  LDA  #$00
+L533A:  STA  DSPLAY
+L533D:  STA  FRAME
+L533F:  RTS
+
+CHKS2:
+L5340:  .byte $70
+L5341:  .byte $45, $44, $52
+
+;------------------------------------------------------------------------------
+; CKSCOR - HIGH SCORE STUFF
+;   MOST OF THIS JUNK IS TO HANDLE
+;   HIGH SCORE STUFF
+;------------------------------------------------------------------------------
+CKSCOR:
+L5344:  LDX  #$00
+L5346:  STX  TIMOUT                 ;C RESET TIMER
+L5348:  STX  DSPLAY
+
+CKSCOR_10:
+L534B:  LDY  HSCTBL,X               ;D IF GOOD ENOUGH TO MAKE TABLE
+L534E:  CPY  HITS
+L5350:  LDA  HSCTBL+1,X
+L5353:  SBC  HITS+1
+L5355:  BCC  CKSCOR_20
+L5357:  INX
+L5358:  INX
+L5359:  INX
+L535A:  CPX  #HSCNUM*3              ;D IF NOT DONE
+L535C:  BCC  CKSCOR_10
+L535E:  JMP  B_END                  ;B NOT GOOD ENOUGH
+
+CKSCOR_20:
+L5361:  LDA  #$00                   ;C RESET TIME OUT
+L5363:  STA  FRAME
+L5365:  STA  LETR
+L5368:  STX  SAVX
+L536B:  STA  OBJCOL                 ;C KILL ANY CONTINUOUS SOUNDS
+L536D:  STA  SCOLFG
+L536F:  STA  SAUCER
+L5371:  LDA  #SUPBON                ;C PLAY THE TUNE FOR THE TURKEY
+L5373:  JSR  SNDON
+L5376:  LDA  GOVER                  ;C SET HI SCORE MODE
+L5378:  ORA  #$80
+L537A:  STA  GOVER
+L537C:  LDX  #[HSCNUM-1]*3
+
+CKSCOR_25:
+L537E:  CPX  SAVX                   ;C MOVE SCORES & INITIALS DOWN
+L5381:  BEQ  CKSCOR_30              ;IF DONE
+L5383:  LDA  HSCTBL-3,X
+L5386:  STA  HSCTBL,X
+L5389:  LDA  HSCTBL-2,X
+L538C:  STA  HSCTBL+1,X
+L538F:  LDA  INITLS-3,X
+L5392:  STA  INITLS,X
+L5395:  LDA  INITLS-2,X
+L5398:  STA  INITLS+1,X
+L539B:  LDA  INITLS-1,X
+L539E:  STA  INITLS+2,X
+L53A1:  DEX
+L53A2:  DEX
+L53A3:  DEX
+L53A4:  BPL  CKSCOR_25              ;B
+
+CKSCOR_30:
+L53A6:  LDA  HITS                   ;C INSERT NEW SCORE IN TABLE
+L53A8:  STA  HSCTBL,X
+L53AB:  LDA  HITS+1
+L53AD:  STA  HSCTBL+1,X
+L53B0:  LDA  #$04
+L53B2:  STA  LTIMER
+L53B5:  LDA  #$16                   ;C SET UP INITIALS
+L53B7:  STA  STINTL
+L53BA:  LDA  #$4C
+L53BC:  STA  STINTL+1
+L53BF:  STA  STINTL+2
+L53C2:  JMP  B_END                  ;B
+
+;------------------------------------------------------------------------------
+; HISCRE - [note] High-score initials entry state: after a timeout (TIMOUT>=4) ends entry (HISCRE_60), show INFO
+;   plus the 4-line entry instructions (LINE1-4 via MSGS) and call LETCHK for initials input; a
+;   one-shot gate (POINT=0 and HITS+2 nonzero, cleared here) plays the cannon-explosion sound once
+;   the first time through after CKSCOR queues the entry.
+;------------------------------------------------------------------------------
+HISCRE:
+L53C5:  LDA  TIMOUT
+L53C7:  CMP  #$04
+L53C9:  BCS  HISCRE_60              ;D IF TIMOUT
+L53CB:  LDA  POINT                  ;D SEE IF OVERTURE OVER (TURE)
+L53CD:  BNE  HISCRE_10
+L53CF:  LDX  HITS+2                 ;D IF EPLO DONE ALREADY ( CHEAP TRICK )
+L53D1:  BEQ  HISCRE_10
+L53D3:  STA  HITS+2                 ;C MAKE CHEAP TRICK VIABLE
+L53D5:  LDA  #$02
+L53D7:  STA  SNDWRD                 ;C CANNON EXPLOSION
+L53D9:  LDA  #$FF
+L53DB:  STA  EXPCNT
+
+HISCRE_10:
+L53DD:  JSR  INFO
+L53E0:  LDX  #LINE1                 ;C OUTPUT INSTRUCTIONS
+L53E2:  JSR  MSGS
+L53E5:  LDX  #LINE2
+L53E7:  JSR  MSGS
+L53EA:  LDX  #LINE3
+L53EC:  JSR  MSGS
+L53EF:  LDX  #LINE4
+L53F1:  JSR  MSGS
+L53F4:  JSR  LETCHK                 ;C LETTER CHANGE
+L53F7:  LDA  ALLPOT                 ;D IF BUTTON NOT PUSHED ( AND DEBOUNCE )
+L53FA:  STA  NWSTAT
+L53FD:  EOR  OLSTAT
+L5400:  AND  NWSTAT
+L5403:  LDX  NWSTAT
+L5406:  STX  OLSTAT
+L5409:  AND  #PL1FIR
+L540B:  BEQ  HISCRE_20
+L540D:  LDX  LETR                   ;D IF LAST LETTER
+L5410:  CPX  #$02
+L5412:  BCS  HISCRE_60
+L5414:  INX                         ;C NEXT LETTER
+L5415:  STX  LETR
+L5418:  LDA  #$16                   ;BLANK NEXT LETTER
+L541A:  STA  STINTL,X
+
+HISCRE_20:
+L541D:  JSR  VGCNTR
+L5420:  LDY  #$00                   ;C OUTPUT INITIALS
+L5422:  STY  VGSIZE
+L5424:  LDA  #$EE
+L5426:  LDX  #$EE
+L5428:  JSR  VGVTR
+L542B:  LDX  #$00
+
+HISCRE_30:
+L542D:  STX  TEMP1
+L542F:  LDA  STINTL,X
+L5432:  JSR  DSPALP
+L5435:  LDX  TEMP1
+L5437:  INX
+L5438:  CPX  #$03
+L543A:  BCC  HISCRE_30
+L543C:  JSR  FINISH
+L543F:  JMP  MAIN
+
+HISCRE_60:
+L5442:  LDX  SAVX                   ;MOVE INITIALS
+L5445:  LDY  #$00
+
+HISCRE_61:
+L5447:  LDA  STINTL,Y
+L544A:  STA  INITLS,X
+L544D:  CPY  #$02
+L544F:  BCC  HISCRE_65
+L5451:  LDA  #$03
+L5453:  STA  TIMOUT
+L5455:  STA  GOVER
+L5457:  LDA  #$81
+L5459:  STA  DSPLAY
+L545C:  STA  FRAME
+L545E:  JMP  MAIN
+
+HISCRE_65:
+L5461:  INX
+L5462:  INY
+L5463:  BNE  HISCRE_61
+
+;------------------------------------------------------------------------------
+; LETCHK - C LETTER CHANGE  (comment at the call)
+;------------------------------------------------------------------------------
+LETCHK:
+L5465:  STA  POTGO                  ;C READ CONTROLLER
+L5468:  LDA  ALLPOT
+L546B:  AND  #$03                   ;D IF PUSHED
+L546D:  BNE  LETCHK_10
+
+LETCHK_3:
+L546F:  LDA  #$04                   ;C RESET TIMER
+L5471:  STA  LTIMER
+
+LETCHK_5:
+L5474:  RTS
+
+LETCHK_10:
+L5475:  DEC  LTIMER                 ;C DELAY
+L5478:  BNE  LETCHK_5
+L547A:  LDX  LETR                   ;C GET LETTER
+L547D:  LDY  STINTL,X
+L5480:  LSR                         ;D IF INCREMENT LETTER
+L5481:  BCC  LETCHK_30
+L5483:  DEY                         ;C DECREMENT LETTER
+L5484:  DEY
+L5485:  CPY  #$16
+L5487:  BCS  LETCHK_40
+L5489:  LDY  #$4A
+L548B:  BNE  LETCHK_40
+
+LETCHK_30:
+L548D:  INY                         ;C INCREMENT LETTER
+L548E:  INY
+L548F:  CPY  #$4C
+L5491:  BCC  LETCHK_40
+L5493:  LDY  #$16
+
+LETCHK_40:
+L5495:  TYA
+L5496:  STA  STINTL,X
+L5499:  BNE  LETCHK_3               ;B
+
+DISTBL:
+L549B:  JSR  INFO                   ;C OUTPUT CURRENT SCORE
+L549E:  LDX  #HISCOR
+L54A0:  JSR  MSGS
+L54A3:  JSR  VGCNTR
+L54A6:  LDY  #$00
+L54A8:  STY  SAVX
+L54AB:  LDA  #$E0
+L54AD:  LDX  #$1E
+L54AF:  STX  YDISP
+
+DISTBL_10:
+L54B2:  JSR  VGVTR
+L54B5:  LDX  SAVX
+L54B8:  LDA  HSCTBL,X
+L54BB:  STA  TEMP2
+L54BD:  ORA  HSCTBL+1,X             ;D IF DONE
+L54C0:  BEQ  DISTBL_40
+L54C2:  LDA  HSCTBL+1,X             ;C OUTPUT SCORE
+L54C5:  STA  TEMP2+1
+L54C7:  LDA  #TEMP2
+L54C9:  JSR  DIGT2S
+L54CC:  LDX  #ZEROS
+L54CE:  JSR  MSGS
+
+DISTBL_20:
+L54D1:  LDX  SAVX                   ;C OUTPUT INITIALS
+L54D4:  LDA  INITLS,X
+L54D7:  JSR  DSPALP
+L54DA:  LDX  SAVX
+L54DD:  LDA  INITLS+1,X
+L54E0:  JSR  DSPALP
+L54E3:  LDX  SAVX
+L54E6:  LDA  INITLS+2,X
+L54E9:  JSR  DSPALP
+L54EC:  LDY  #$00
+L54EE:  LDX  SAVX
+L54F1:  LDA  HSCTBL+1,X             ;D
+L54F4:  BEQ  DISTBL_25
+L54F6:  TAX
+L54F7:  LDA  VGMSGA                 ;C BLANK BEFORE TANK
+L54FA:  STA  (VGLIST),Y
+L54FC:  INY
+L54FD:  LDA  VGMSGA+1
+L5500:  STA  (VGLIST),Y
+L5502:  CPX  #$0A
+L5504:  BCC  DISTBL_23
+L5506:  LDX  #$0A
+
+DISTBL_23:
+L5508:  INY
+L5509:  LDA  TSYMBL                 ;C
+L550C:  STA  (VGLIST),Y
+L550E:  INY
+L550F:  LDA  TSYMBL+1
+L5512:  STA  (VGLIST),Y
+L5514:  DEX
+L5515:  BNE  DISTBL_23
+L5517:  JSR  VGADD
+
+DISTBL_25:
+L551A:  LDX  SAVX                   ;D IF DONE
+L551D:  CPX  #[HSCNUM-1]*3
+L551F:  BCS  DISTBL_40
+L5521:  INX                         ;C NEXT
+L5522:  INX
+L5523:  INX
+L5524:  STX  SAVX
+L5527:  JSR  VGCNTR                 ;C MOVE BEAM TO NEXT LINE
+L552A:  LDA  YDISP
+L552D:  SEC
+L552E:  SBC  #$0A
+L5530:  STA  YDISP
+L5533:  TAX
+L5534:  LDA  #$E0
+L5536:  LDY  #$00
+L5538:  JMP  DISTBL_10
+L553B:  .byte $45, $52
+
+DISTBL_40:
+L553D:  LDA  OPTION
+L5540:  LSR                         ;C SET TEMP2 W/BONUS LEVEL
+L5541:  LSR
+L5542:  LSR
+L5543:  LSR
+L5544:  AND  #$03
+L5546:  BEQ  DISTBL_45
+L5548:  TAX
+L5549:  LDA  BONTBL,X
+L554C:  CLC
+L554D:  SED
+L554E:  ADC  #$01
+L5550:  CLD
+L5551:  STA  SAVE1
+L5553:  LDX  #BONPLN
+L5555:  JSR  MSGS                   ;C OUTPUT BONUS MESSAGE
+L5558:  LDA  #SAVE1                 ;C OUTPUT BONUS LEVEL
+L555A:  LDY  #$01
+L555C:  JSR  DIGTYS
+L555F:  LDX  #BONPL1                ;C OUTPUT REMAINING MESSAGE
+L5561:  JSR  MSGS
+
+DISTBL_45:
+L5564:  JSR  FINISH
+L5567:  JMP  MAIN
+
+;------------------------------------------------------------------------------
+; DSPALP - [note] Draw one alphanumeric vector character (code in A): looks up its JSRL address in VGMSGA and
+;   JMP VGADD2 to add it to the vector list - used to spell out initials directly, not from a
+;   fixed message table.
+;------------------------------------------------------------------------------
+DSPALP:
+L556A:  TAY                         ;C OUTPUT ALPHA NUM CHAR.
+L556B:  LDX  VGMSGA+1,Y
+L556E:  LDA  VGMSGA,Y
+L5571:  JMP  VGADD2
+
+;------------------------------------------------------------------------------
+; FINISH - [note] End of a display build: VGHALT stops the AVG on the finished list and BUFRDY is cleared (buffer
+;   ready to swap); in attract mode, once 4+ buzz bombers have been destroyed, also copies the
+;   TRAP1 checksum byte into VECRAM (anti-tamper check).
+;------------------------------------------------------------------------------
+FINISH:
+L5574:  JSR  VGHALT                 ;C STOP VG
+L5577:  LDA  #$00                   ;C INDICATE BUFFER READY
+L5579:  STA  BUFRDY
+L557B:  BIT  ATRACT                 ;C SECURITY
+L557D:  BPL  FINISH_10
+L557F:  LDA  NOR2D3
+L5582:  BMI  FINISH_10
+L5584:  CMP  #$04
+L5586:  BCC  FINISH_10
+L5588:  LDA  TRAP1
+L558B:  STA  VECRAM
+
+FINISH_10:
+L558E:  RTS
+
+;------------------------------------------------------------------------------
+; NMI - INTERRUPT ROUTINE
+;   BLOCK NAME: NMI
+;   DESCRIPTION: INCREMENTS INTERRUPT COUNT, MAINTAINS SYNC, HANDLES COINS,
+;   KEEPS VECTOR GENERATOR GOING
+;   SUBROUTINES: MOOLAH,MODSND,SNDON,RDBCHK
+;------------------------------------------------------------------------------
+NMI:
+L558F:  PHA                         ;L SAVE REGISTERS
+L5590:  TXA
+L5591:  TSX
+L5592:  BMI  NMI_2                  ;D IF STACK BLITZED
+L5594:  PHA
+L5595:  INC  S_INTCT                ;C UPDATE INTERRUPT COUNT
+L5597:  LDA  S_INTCT                ;D IF NOT END OF FRAME (64 MS)
+L5599:  AND  #$0F
+L559B:  BNE  NMI_10
+L559D:  INC  SYNC                   ;S MAINTAIN SYNCHRONIZATION
+
+NMI_2:
+L559F:  BMI  NMI_2                  ;D IF LOST
+
+NMI_10:
+L55A1:  TYA
+L55A2:  PHA
+L55A3:  CLD                         ;C INSURE WE DON'T SCREW UP COINS IN BINARY
+L55A4:  STA  WTCHDG
+L55A7:  LDA  OPTON2                 ;C SET COIN MODE
+L55AA:  STA  S_CMODE
+L55AC:  JSR  MOOLAH                 ;C LOOK FOR MONEY
+L55AF:  LDA  S_CCTIM
+L55B1:  ROL
+L55B2:  LDA  S_CCTIM+1
+L55B4:  ROL
+L55B5:  ROL
+L55B6:  PHA
+L55B7:  LDA  S_CCTIM+2
+L55B9:  ROL
+L55BA:  PLA
+L55BB:  ROL
+L55BC:  STA  EMCNT
+L55BF:  JSR  MODSND
+L55C2:  BIT  SUPER                  ;D IF SUPER BONUS, DON'T START ANY SOUNDS!
+L55C5:  BMI  NMI_15
+L55C7:  LDA  POINT
+L55C9:  BNE  NMI_15
+L55CB:  LDA  SCOLFG                 ;C PRIORITIZE SOUNDS
+L55CD:  BEQ  NMI_3
+L55CF:  LDA  #DISINT
+L55D1:  BNE  NMI_11
+
+NMI_3:
+L55D3:  LDA  OBJCOL
+L55D5:  BEQ  NMI_6
+L55D7:  LDA  #BLKSND
+L55D9:  BNE  NMI_11
+
+NMI_6:
+L55DB:  BIT  SAUCER
+L55DD:  BPL  NMI_15
+L55DF:  LDA  #SAUSND
+
+NMI_11:
+L55E1:  JSR  SNDON
+
+NMI_15:
+L55E4:  LDA  EXPCNT                 ;D IF NOT EXPLOSION
+L55E6:  BEQ  NMI_17
+L55E8:  DEC  EXPCNT                 ;D IF EXPLOSION
+L55EA:  BNE  NMI_16
+L55EC:  LDA  #$00                   ;C SHUT OFF EXPLOSION SOUND
+L55EE:  BEQ  NMI_17                 ;B
+
+NMI_16:
+L55F0:  LDA  #$01                   ;C TURN ON EXPLOSION SOUND
+
+NMI_17:
+L55F2:  TAY
+L55F3:  LDA  SXPCNT                 ;D IF NOT SHELL FIRED
+L55F5:  BEQ  NMI_18
+L55F7:  DEC  SXPCNT
+L55F9:  BEQ  NMI_18
+L55FB:  TYA
+L55FC:  ORA  #$04                   ;C TURN ON SHELL
+L55FE:  TAY
+
+NMI_18:
+L55FF:  TYA
+L5600:  ORA  SNDWRD
+L5602:  BIT  ATRACT                 ;D IF ATTRACT MODE
+L5604:  BPL  NMI_19
+L5606:  ORA  #$A0                   ;C GAME - ENABLE SOUNDS AND RUMBLE
+L5608:  JMP  NMI_56
+
+NMI_19:
+L560B:  BIT  GOVER                  ;D IF ACCEPTING INITIALS
+L560D:  BMI  NMI_54
+L560F:  LDA  #$00                   ;START WITH NOTHING
+
+NMI_60:
+L5611:  LDX  S_LMTIM                ;D IF NOT SLAM
+L5613:  BEQ  NMI_65
+L5615:  ORA  #$20                   ;C SOUND THE ALARM
+L5617:  LDX  POINT                  ;C IF SOUND GOING
+L5619:  BNE  NMI_65
+L561B:  PHA
+L561C:  LDA  #DISINT
+L561E:  JSR  SNDON
+L5621:  PLA
+
+NMI_65:
+L5622:  PHA
+L5623:  LDA  S_CMODE                ;D IF FREE PLAY
+L5625:  AND  #$03
+L5627:  BEQ  NMI_68
+L5629:  LDA  S_S_CRDT               ;D IF NO MONEY
+L562B:  BEQ  NMI_55
+
+NMI_68:
+L562D:  LDA  FRAME                  ;C FLASH BUTTON
+L562F:  LSR
+L5630:  LSR
+L5631:  PLA
+L5632:  BCC  NMI_70
+L5634:  ORA  #$40
+
+NMI_70:
+L5636:  STA  POTGO
+L5639:  STA  SOUND                  ;C TURN OFF SOUNDS
+L563C:  LDA  ALLPOT                 ;D IF NOT START
+L563F:  AND  #START
+L5641:  BEQ  NMI_40
+L5643:  LDA  #$FF
+L5645:  STA  NOR2D3
+L5648:  STA  ATRACT
+L564A:  LDA  S_S_CRDT
+L564C:  SEC
+L564D:  SBC  TRAP1
+L5650:  STA  S_S_CRDT
+L5652:  LDA  #$00
+L5654:  STA  SKCTL
+L5657:  STA  S_BCCNT                ;C RESET BONUS ADDER
+L5659:  STA  LOGO
+L565C:  STA  SOUND                  ;TURN OFF LICONS
+L565F:  STA  HITS
+L5661:  STA  HITS+1
+L5663:  STA  HITS+3
+L5665:  STA  HITS+2
+L5667:  STA  ACTION
+L5669:  STA  FIRECT+2
+L566B:  STA  GOVER
+L566D:  STA  TIMOUT
+L566F:  STA  SCOLFG
+L5671:  STA  SAUCER
+L5673:  STA  TANGLE
+L5675:  STA  TPOSX+1
+L5677:  STA  TPOSY+1
+L5679:  LDA  #$07                   ;C RE-INIT POKEY
+L567B:  STA  SKCTL
+L567E:  JSR  ROBCHK
+L5681:  CLC
+L5682:  LDA  OPTION
+L5685:  AND  #$03
+L5687:  ADC  #$02
+L5689:  STA  LIVES
+L568B:  BPL  NMI_40                 ;B
+
+NMI_54:
+L568D:  ORA  #$60                   ;C TURN OFF RUMBLE ONLY
+L568F:  BNE  NMI_56                 ;B
+
+NMI_55:
+L5691:  PLA                         ;C RETRIEVE SOUND VALUE
+L5692:  ORA  #$40                   ;C TURN OFF LICONS
+
+NMI_56:
+L5694:  STA  SOUND
+
+NMI_40:
+L5697:  DEC  VTIMER
+L5699:  BNE  NMI_20
+L569B:  STA  VSTOP
+L569E:  LDA  BUFRDY                 ;S IF BUFFER NOT COMPLETE
+L56A0:  BNE  NMI_30
+L56A2:  LDA  VECRAM+1               ;C SWITCH BUFFERS
+L56A5:  EOR  #$04
+L56A7:  STA  VECRAM+1
+L56AA:  AND  #$04
+L56AC:  BNE  NMI_25                 ;D IF LOWER BUFFER AVAILABLE
+L56AE:  LDA  #[VECRAM/$100]+8       ;C USE UPPER BUFFER
+L56B0:  BNE  NMI_26
+
+NMI_25:
+L56B2:  LDA  #VECRAM/$100           ;C USE LOWER BUFFER
+
+NMI_26:
+L56B4:  STA  BUFRDY
+
+NMI_30:
+L56B6:  STA  GOADD                  ;C START UP VECTOR GENERATOR FOR 24 MS.
+L56B9:  LDA  #$06
+L56BB:  STA  VTIMER
+
+NMI_20:
+L56BD:  PLA                         ;L RESTORE REGISTERS
+L56BE:  TAY
+L56BF:  PLA
+L56C0:  TAX
+L56C1:  PLA
+L56C2:  RTI
+
+;------------------------------------------------------------------------------
+; MOOLAH - DETECT COIN
+;   IF YOU USE CMZP=0, DEFINE EQUIVALENT MACROS
+;   (GCM NOT NEEDED IF MODES=0)
+;   GHM, GDM NOT NEEDED IF MULTS=0
+;   ENTRY POINT
+;   EXTERNAL REFERENCES
+;   The coin routine assumes the presence of the following .GLOBL variables:
+;   INSTRUCTIONS IN BRACKETS( "[" AND "]" ) ARE FOR ILLUSTRATION ONLY, AND ARE NOT
+;   ACTUALLY ASSEMBLED.
+;------------------------------------------------------------------------------
+MOOLAH:
+L56C3:  LDX  #$02                   ;(src: LDX I,OFFSET*<MECHS-1>)  X IS USED TO INDEX FROM RIGHT TO LEFT COIN MECH
+
+S_DETCT:
+L56C5:  LDA  S_COINA                ;GET COIN SWITCHES
+L56C8:  CPX  #$01                   ;(src: CPX I,OFFSET)  WHICH MECH ARE WE DOING
+L56CA:  BEQ  S_DETCT_11             ;MIDDLE (X=OFFSET) SHIFT TWICE
+L56CC:  BCS  S_DETCT_12             ;RIGHT (X=2*OFFSET) SHIFT ONCE
+L56CE:  LSR                         ;ELSE LEFT, SHIFT THRICE
+
+S_DETCT_11:
+L56CF:  LSR
+
+S_DETCT_12:
+L56D0:  LSR
+L56D1:  LDA  S_CNSTT,X
+L56D3:  AND  #$1F                   ;SHARED INST. SEE BELOW IN BRACKETS []
+L56D5:  BCS  S_DETCT_5              ;BRANCH IF INPUT HIGH (COIN ABSENT)
+;[AND I,31.] ISOLATE COIN-ON DOWN-COUNTER, RESET COIN-OFF UP-CTR.
+L56D7:  BEQ  S_DETCT_1              ;STICK AT 0 (TERMINAL COUNT)
+L56D9:  CMP  #$1B                   ;IN FIRST FIVE SAMPLES?
+L56DB:  BCS  S_DETCT_10             ;YES, RUN FAST
+L56DD:  TAY                         ;ELSE SAVE STATUS
+L56DE:  LDA  S_INTCT                ;CHECK INTERUPT CTR
+L56E0:  AND  #$07                   ;ARE D0-D2 ALL ONES?
+L56E2:  CMP  #$07                   ;SET CARRY IF SO
+L56E4:  TYA                         ;STATUS BACK INTO ACC
+L56E5:  BCC  S_DETCT_1              ;SKIP IF NOT ALL ONES
+
+S_DETCT_10:
+L56E7:  SBC  #$01                   ;CARRY SET
+
+S_DETCT_1:
+L56E9:  STA  S_CNSTT,X              ;SAVE UPDATED STATUS
+L56EB:  LDA  S_LAM                  ;CHECK SLAM SWITCH
+L56EE:  AND  #S_LMBIT
+L56F0:  BNE  S_DETCT_2              ;BRANCH IF BIT HI (SWITCH OFF)
+L56F2:  LDA  #$F0                   ;(src: LDA I,PRST*8)  ELSE SET PRE-COIN SLAM TIMER
+L56F4:  STA  S_LMTIM                ;DECR. 8 TIMES/FRAME=PRST FRAMES
+
+S_DETCT_2:
+L56F6:  LDA  S_LMTIM                ;CHECK PRE-COIN SLAM TIMER
+L56F8:  BEQ  S_DETCT_3              ;O.K.
+L56FA:  DEC  S_LMTIM                ;ELSE RUN TIMER
+L56FC:  LDA  #$00
+L56FE:  STA  S_CNSTT,X              ;CLEAR COIN STATUS
+L5700:  STA  S_PSTSL,X              ;CLEAR POST-COIN SLAM-TIMER
+
+S_DETCT_3:
+L5702:  CLC                         ;DEFAULT "NO COIN DETECTED"
+L5703:  LDA  S_PSTSL,X              ;CHECK POST-COIN SLAM-TIMER
+L5705:  BEQ  S_DETCT_8              ;EMPTY, PROCEED
+L5707:  DEC  S_PSTSL,X              ;RUN TIMER
+L5709:  BNE  S_DETCT_8              ;NOT DONE, PROCEED
+L570B:  SEC                         ;WHEN IT BECOMES ZERO, INDICATE A COIN
+L570C:  BCS  S_DETCT_8              ;(ALWAYS)
+
+S_DETCT_5:       ;[AND I,31.] GET COIN-ON DOWN-CTR (ACTUALLY DONE BEFORE)
+L570E:  CMP  #$1B                   ;IS COIN VALID YET (ON FOR >4 SAMPLES)
+L5710:  BCS  S_DETCT_6              ;NO, RESET IT
+L5712:  LDA  S_CNSTT,X              ;GET STATUS AGAIN
+L5714:  ADC  #$20                   ;BUMP COIN-OFF UP-CTR.
+L5716:  BCC  S_DETCT_1              ;IF IT DIDN'T WRAP, JUST STORE STATUS
+L5718:  BEQ  S_DETCT_6              ;IT WRAPPED BUT COIN WAS ON TOO LONG, JUST RESET
+L571A:  CLC                         ;SET "VALIDITY" AGAIN
+
+S_DETCT_6:
+L571B:  LDA  #$1F                   ;RESET DOWN-COUNTER
+L571D:  BCS  S_DETCT_1              ;BRANCH IF COIN TOO LONG OR TOO SHORT
+L571F:  STA  S_CNSTT,X              ;SAVE RESET STATUS
+;[CLC] DEFAULT TO "NO COIN" (CARRY IS ALREADY CLEAR)
+L5721:  LDA  S_PSTSL,X              ;CHECK HOWIES ASSUMPTION
+L5723:  BEQ  S_DETCT_7              ;BRANCH IF $PSTSL VACANT
+L5725:  SEC                         ;ELSE GIVE CREDIT A LITTLE EARLY
+
+S_DETCT_7:
+L5726:  LDA  #$78                   ;(src: LDA I,POST*4)  /(4 COUNTS/FRAME)="POST" FRAMES
+L5728:  STA  S_PSTSL,X              ;DELAY ACCEPTANCE FOR POST/60 SEC.
+
+S_DETCT_8:       ;CARRY=1 IF COIN FALLS OUT
+L572A:  BCC  S_DETCT_9
+
+;.SBTTL MECH-MULTIPLIERS
+;FALL THROUGH TO "MECH-MULTIPLIERS"
+L572C:  LDA  #$00                   ;START WITH 0 (TO ADD 1)
+L572E:  CPX  #$01                   ;(src: CPX I,OFFSET)  CHECK WHICH MECH
+L5730:  BCC  S_DETCT_85             ;IF LEFT, ALWAYS ADD 1
+L5732:  BEQ  S_DETCT_83             ;IF CENTER, CHECK HALF-MUL
+L5734:  LDA  S_CMODE                ;GDM  GET DOLLAR MUL
+L5736:  AND  #$0C
+L5738:  LSR
+L5739:  LSR
+L573A:  BEQ  S_DETCT_85             ;00-ADD 1
+L573C:  ADC  #$02                   ;ELSE MAP 1,2,3 TO 3,4,5
+L573E:  BNE  S_DETCT_85             ;(ALWAYS)
+
+S_DETCT_83:
+L5740:  LDA  S_CMODE                ;GHM
+L5742:  AND  #$10
+L5744:  BEQ  S_DETCT_85
+L5746:  LDA  #$01
+
+S_DETCT_85:
+L5748:  SEC
+L5749:  PHA
+L574A:  ADC  S_BCCNT                ;UPDATE BONUS-ADDER COUNTER
+L574C:  STA  S_BCCNT
+L574E:  PLA
+L574F:  SEC
+L5750:  ADC  S_CNCT
+L5752:  STA  S_CNCT
+L5754:  INC  S_CCTIM,X              ;"QUEUE" PULSE FOR E.M. COUNTER
+
+S_DETCT_9:
+L5756:  DEX                         ;.REPT OFFSET
+L5757:  BMI  S_BONUS
+L5759:  JMP  S_DETCT
+
+;------------------------------------------------------------------------------
+; S_BONUS - BONUS-ADDER
+;   FALL THRU TO BONUS-ADDER
+;   (also: S_DETCT_120)
+;------------------------------------------------------------------------------
+S_BONUS:
+S_DETCT_120:
+L575C:  LDA  S_CMODE                ;GBAM  GET BONUS ADDER MODE
+L575E:  LSR
+L575F:  LSR
+L5760:  LSR
+L5761:  LSR
+L5762:  LSR
+L5763:  TAY
+L5764:  LDA  S_BCCNT
+L5766:  SEC
+L5767:  SBC  S_MODLO,Y              ;SEE IF ENOUGH UNIT-COINS HAVE ACCUMULATED
+L576A:  BMI  S_EXTB                 ;BRANCH IF NOT
+L576C:  STA  S_BCCNT                ;ELSE UPDATE BONUS-ADDER AND...
+L576E:  INC  S_CNCT                 ;GIVE ONE OR TWO BONUS UNIT-COINS
+L5770:  CPY  #$03
+L5772:  BNE  S_EXTB
+L5774:  INC  S_CNCT                 ;MODE 3 YIELDS 2 BONUS COINS FOR 4 INSERTED
+L5776:  BNE  S_EXTB                 ;BRA
+
+S_MODLO:         ;THIS IS THE NUMBER OF UNIT-COINS REQUIRED TO RECEIVE BONUS
+L5778:  .byte $7F, $02, $04, $04, $05, $7F, $7F, $7F ;7F IS USED TO GENERATE ZERO BONUS COINS
+
+;------------------------------------------------------------------------------
+; S_EXTB - COINS TO CREDITS
+;   FALL THROUGH TO CONVERT COINS TO CREDITS
+;   (also: S_CNVRT)
+;------------------------------------------------------------------------------
+S_EXTB:
+S_CNVRT:
+L5780:  LDA  S_CMODE                ;GCM  GET COIN MODE IN ACC 0,1
+L5782:  AND  #$03
+L5784:  TAY                         ;SAVE IT & TEST IT
+L5785:  BEQ  S_CNVRT_2              ;IF FREE PLAY, KEEP COIN COUNT CLEAR, LEAVE CREDIT
+L5787:  LSR
+L5788:  ADC  #$00                   ;FORM PRICE (0,1,1,2)
+L578A:  EOR  #$FF
+L578C:  SEC                         ;NEGATE
+L578D:  ADC  S_CNCT                 ;ACC <- COINCT - PRICE
+L578F:  BCC  S_EXT                  ;BRANCH ON BORROW
+L5791:  CPY  #$02                   ;COIN MODE 2 OR 3?
+L5793:  BCS  S_CNVRT_1              ;YES, JUST ONE CREDIT
+L5795:  INC  S_S_CRDT               ;ELSE GIVE TWO FOR MODES 0,1
+
+S_CNVRT_1:
+L5797:  INC  S_S_CRDT
+
+S_CNVRT_2:
+L5799:  STA  S_CNCT                 ;STORE REDUCED (OR CLEARED) COINCT
+
+;.SBTTL ELECTRO-MECH. CTRS
+
+S_EXT:
+;FALL THROUGH TO HANDLE E.M. COUNTERS
+L579B:  LDA  S_INTCT                ;GET $INTCT
+L579D:  LSR                         ;USE LSB FOR PULSE=4 FRAMES
+L579E:  BCS  S_EXT_99
+L57A0:  LDY  #$00                   ;START WITH FLAG OF 0
+L57A2:  LDX  #$02                   ;(src: LDX I,OFFSET*<EMCTRS-1>)
+
+S_EXT_1:
+L57A4:  LDA  S_CCTIM,X              ;CHECK TIMER(X)
+L57A6:  BEQ  S_EXT_3                ;NEITHER RUNNING NOR PENDING
+L57A8:  CMP  #$10                   ;IS IT RUNNING
+L57AA:  BCC  S_EXT_3                ;NO, SKIP
+L57AC:  ADC  #$EF                   ;ELSE DEC 4 MSB
+L57AE:  INY                         ;SET ON FLAG
+
+S_EXT_2:
+L57AF:  STA  S_CCTIM,X
+
+S_EXT_3:
+L57B1:  DEX                         ;.REPT OFFSET
+L57B2:  BPL  S_EXT_1
+L57B4:  TYA                         ;CHECK "ON" FLAG
+L57B5:  BNE  S_EXT_99               ;SKIP IF ANY ON
+;IF NONE OF THE COUNTERS ARE CURRENTLY ON, WE CHECK TO SEE IF ANY CAN BE
+;STARTED.
+L57B7:  LDX  #$02                   ;(src: LDX I,OFFSET*<EMCTRS-1>)
+
+S_EXT_4:
+L57B9:  LDA  S_CCTIM,X              ;NEED WE START THIS ONE
+L57BB:  BEQ  S_EXT_5                ;NO, NO COUNTS PENDING
+L57BD:  CLC
+L57BE:  ADC  #$EF                   ;SET 4 MSB, DEC 4 LSB
+L57C0:  STA  S_CCTIM,X              ;START TIMER
+L57C2:  BMI  S_EXT_99               ;EXIT, SO WE DON'T START MORE
+
+S_EXT_5:
+L57C4:  DEX                         ;.REPT OFFSET
+L57C5:  BPL  S_EXT_4
+
+S_EXT_99:
+L57C7:  RTS
+
+;------------------------------------------------------------------------------
+; MOUNTS - DRAW MOUNTAIN SCAPE
+;   BLOCK NAME: MOUNTS
+;   DESCRIPTION: DOES A LABS TO CORRECT PLACE TO START FOR MOUNTAINS.
+;   SETS UP JSRL TO MOUNTAINS ROUTINE IN ROM
+;   SUBROUTINES: VGLABS,VGJSRL
+;   REGISTERS: A,X,Y
+;------------------------------------------------------------------------------
+MOUNTS:
+L57C8:  LDX  #$00                   ;LDA VIEW FOR 1 BIT RESOLUTION
+L57CA:  STX  XCOMP+3
+L57CC:  STX  XCOMP+2
+L57CE:  LDA  LANGLE
+L57D0:  STA  XCOMP
+L57D2:  LDA  TANGLE                 ;X=ANGLE (9 BITS)
+L57D4:  LSR                         ;THIS MEANS IT WRAPS AROUND EVERY 360 DEGRS
+L57D5:  ROR  XCOMP
+L57D7:  LSR
+L57D8:  ROR  XCOMP
+L57DA:  LSR
+L57DB:  ROR  XCOMP
+L57DD:  LSR
+L57DE:  ROR  XCOMP
+L57E0:  PHA
+L57E1:  AND  #$01
+L57E3:  ORA  #$02                   ;512 TO 1023 RANGE
+L57E5:  STA  XCOMP+1
+L57E7:  LDA  BOUNCE                 ;C PROVIDE BOUNCE
+L57E9:  LSR
+L57EA:  LSR
+L57EB:  LSR
+L57EC:  LSR
+L57ED:  BEQ  MOUNTS_20
+L57EF:  STA  TEMP1
+L57F1:  SEC
+L57F2:  LDA  XCOMP+2
+L57F4:  SBC  TEMP1
+L57F6:  STA  XCOMP+2
+L57F8:  LDA  #$FF
+L57FA:  STA  XCOMP+3
+
+MOUNTS_20:
+L57FC:  JSR  VGCNTR                 ;CENTER BEAM
+L57FF:  JSR  VGVTR2                 ;POSITION BEAM
+L5802:  LDA  #>HORIZN               ;LAH HORIZN
+L5804:  LDX  #<HORIZN               ;LXL HORIZN
+L5806:  JSR  VGJSRL                 ;ADD HORIZON LINE
+L5809:  PLA
+L580A:  EOR  #$0F
+L580C:  JSR  MOUNTS_50              ;DRAW 3/2 FULL SCREEN
+L580F:  JSR  MOUNTS_50              ;TO INSURE FULL VIEW
+L5812:  JSR  MOUNTS_50
+L5815:  LDA  LANGLE                 ;SET UP FOR SIFT
+L5817:  STA  XCOMP
+L5819:  LDA  TANGLE                 ;D IF VOLCANO NOT ON SCREEN
+L581B:  CMP  #$88
+L581D:  BCS  MOUNTS_21
+L581F:  CMP  #$39
+L5821:  BCS  MOUNTS_22
+
+MOUNTS_21:
+L5823:  RTS
+
+MOUNTS_22:
+L5824:  LSR                         ;C DUBLE SIFT 4 TO SCALE
+L5825:  ROR  XCOMP
+L5827:  LSR
+L5828:  ROR  XCOMP
+L582A:  LSR
+L582B:  ROR  XCOMP
+L582D:  LSR
+L582E:  ROR  XCOMP
+L5830:  STA  XCOMP+1
+L5832:  LDA  XCOMP
+L5834:  SEC
+L5835:  SBC  #$05
+L5837:  STA  XCOMP
+L5839:  LDA  XCOMP+1
+L583B:  SBC  #$06
+L583D:  STA  XCOMP+1
+L583F:  CLC
+L5840:  LDA  #$5E
+L5842:  ADC  XCOMP+2
+L5844:  STA  XCOMP+2
+L5846:  BCC  MOUNTS_25
+L5848:  INC  XCOMP+3
+
+MOUNTS_25:
+L584A:  JSR  VGCNTR                 ;C MOVE BEAM TO TOP OF VOLCANO
+L584D:  JSR  VGVTR2
+L5850:  LDA  #$00
+L5852:  STA  CURNTX
+L5854:  STA  CURNTX+1
+L5856:  STA  CURNTY
+L5858:  STA  CURNTY+1
+L585A:  LDX  #NOROCK-1
+
+MOUNTS_30:
+L585C:  LDA  OBJTIM,X               ;D IF NOT ACTIVE
+L585F:  BEQ  MOUNTS_40
+L5861:  LDA  XPOSL,X                ;C DELTA X
+L5864:  SEC
+L5865:  TAY
+L5866:  SBC  CURNTX
+L5868:  STA  XCOMP
+L586A:  STY  CURNTX
+L586C:  LDA  XPOSH,X
+L586F:  TAY
+L5870:  SBC  CURNTX+1
+L5872:  STA  XCOMP+1
+L5874:  STY  CURNTX+1
+L5876:  SEC                         ;C DELTA Y
+L5877:  LDA  YPOSL,X
+L587A:  TAY
+L587B:  SBC  CURNTY
+L587D:  STA  XCOMP+2
+L587F:  STY  CURNTY
+L5881:  LDA  YPOSH,X
+L5884:  TAY
+L5885:  SBC  CURNTY+1
+L5887:  STA  XCOMP+3
+L5889:  STY  CURNTY+1
+L588B:  LDA  #$00                   ;C VECTOR TO POINT
+L588D:  STA  VGBRIT
+L588F:  STX  TEMP1
+L5891:  JSR  VGVTR2
+L5894:  LDX  TEMP1
+L5896:  LDA  OBJTIM,X
+L5899:  ASL
+L589A:  ASL
+L589B:  ASL
+L589C:  AND  #$E0
+L589E:  JSR  VGDOT
+L58A1:  LDX  TEMP1
+
+MOUNTS_40:
+L58A3:  DEX
+L58A4:  BPL  MOUNTS_30
+
+MOUNTS_45:
+L58A6:  RTS
+
+MOUNTS_50:
+L58A7:  AND  #$0E
+L58A9:  TAY
+L58AA:  LDA  MTNS,Y
+L58AD:  INY
+L58AE:  LDX  MTNS,Y
+L58B1:  INY
+L58B2:  STY  TEMP1
+L58B4:  JSR  VGADD2                 ;DRAW MOUNTAINS
+L58B7:  LDA  TEMP1
+L58B9:  RTS
+
+;------------------------------------------------------------------------------
+; VOLCNO - VOLCAO ROCK MOVEMENT
+;   CALLED ONCE A FRAME.
+;   WILL MOVE UP TO 5 ROLMS AT A TIME.
+;   XPOS(2 BYTES) & YPOS(2 BYTES) ARE RELATIVE TO N&E VOLCAO TOP
+;   PAGE 0= OBJTM(5 BYTES), XSPD(5 BYTES, YSPD(5 BYTES)
+;   XPOS(10 BYTES, YPOS(10 BYTES)
+;   CLOBBERS=A,X,Y
+;   NO STALK
+;   (THIS ROUTINE MAY BE BLAMED ON RUWEN OBIN)
+;------------------------------------------------------------------------------
+VOLCNO:
+L58BA:  LDX  #NOROCK-1              ;5 ROCKS
+
+VOLCNO_10:
+L58BC:  LDA  OBJTIM,X               ;THIS ROCK ACTIVE?
+L58BF:  BNE  VOLCNO_30              ;YES
+L58C1:  LDA  PRAND                  ;NOT ACTIVE, SHOULD WE START ONE?
+L58C4:  AND  #$07                   ;(THIS # MAY CHANGE)
+L58C6:  BNE  VOLCNO_50              ;DON'T START THIS TIME
+L58C8:  LDA  #$1F                   ;ROCK ACTIVE TIME
+L58CA:  STA  OBJTIM,X
+L58CD:  LDA  PRAND
+L58D0:  AND  #$03
+L58D2:  ADC  #$01                   ;SOME RANDOM HORIZ POSITION
+L58D4:  BIT  PRAND                  ;LEFT OR RIGHT
+L58D7:  BVC  VOLCNO_11
+L58D9:  EOR  #$FF                   ;CHANGE HORIZ SPEED(+-1)
+
+VOLCNO_11:
+L58DB:  STA  XSPD,X
+L58DE:  LDA  PRAND
+L58E1:  AND  #$07
+L58E3:  ADC  #$05                   ;SOME RANDOM VERT VELOCITY
+L58E5:  STA  YSPD,X
+
+VOLCNO_12:
+L58E8:  LDA  #$00
+L58EA:  STA  XPOSL,X
+L58ED:  STA  XPOSH,X
+L58F0:  STA  YPOSL,X
+L58F3:  STA  YPOSH,X
+L58F6:  BEQ  VOLCNO_50              ;ALWAYS
+
+VOLCNO_30:
+L58F8:  DEC  OBJTIM,X
+L58FB:  BEQ  VOLCNO_12
+L58FD:  DEC  YSPD,X                 ;GRAVITY TAMES HOLD
+L5900:  LDY  #$00                   ;MOVE ROCKS
+L5902:  CLC
+L5903:  LDA  YSPD,X
+L5906:  BPL  VOLCNO_31
+L5908:  DEY                         ;A MINUS #, SIGN EXTEND
+
+VOLCNO_31:
+L5909:  ADC  YPOSL,X
+L590C:  STA  YPOSL,X
+L590F:  LDA  YPOSH,X
+L5912:  BPL  VOLCNO_33
+L5914:  LDA  YPOSL,X                ;LOW ENOUGH
+L5917:  CMP  #$A2
+L5919:  BCS  VOLCNO_33
+L591B:  LDA  #$00
+L591D:  STA  OBJTIM,X
+L5920:  BEQ  VOLCNO_12              ;ALWAYS
+
+VOLCNO_33:
+L5922:  TYA                         ;GET MSB
+L5923:  ADC  YPOSH,X
+L5926:  STA  YPOSH,X
+L5929:  LDY  #$00                   ;MSB 0(GUESS)
+L592B:  CLC
+L592C:  LDA  XSPD,X
+L592F:  BPL  VOLCNO_32
+L5931:  DEY                         ;AS ABOVE, BUT FOR X
+
+VOLCNO_32:
+L5932:  ADC  XPOSL,X
+L5935:  STA  XPOSL,X
+L5938:  TYA
+L5939:  ADC  XPOSH,X
+L593C:  STA  XPOSH,X                ;DONE MOVED THEM!
+
+VOLCNO_50:
+L593F:  DEX
+L5940:  BMI  VOLCNO_55
+L5942:  JMP  VOLCNO_10
+
+VOLCNO_55:
+L5945:  RTS
+
+;------------------------------------------------------------------------------
+; ROTATE - TRANSLATE & ROTATE
+;   BLOCK NAME: ROTATE
+;   DESCRIPTION: ROTATE WILL SCAN THE PLAYFIELD TABLE FOR OBJECT AND
+;   TRANSLATE AND ROTATE THE CENTER POINT OF EACH OBJECT
+;   FOUND AND THEN DETERMINE IF IT WILL BE IN THE FIELD
+;   OF VIEW. IF SO, THE OBJECT WILL THEN BE MOVED TO A
+;   NEW TABLE, THE OBJECTS IN WHICH WILL BE PROJECTED.
+;   INPUT PARAMS: PLAYFIELD TABLES (ROM)
+;   OUTPUT PARAMS: TRANSLATED & ROTATED PLAYFIELD TABLES (RAM) OF ONLY
+;   THOSE OBJECTS IN FIELD OF VIEW
+;   SUBROUTINES: ROTPNT,EXPLDE
+;   REGISTERS: A,X,Y
+;------------------------------------------------------------------------------
+ROTATE:
+L5946:  LDY  #$00
+L5948:  LDA  TPOSX
+L594A:  STA  TPOSXT
+L594D:  LDA  TPOSX+1
+L594F:  STA  TPOSXT+1
+L5952:  LDA  TPOSY
+L5954:  STA  TPOSYT
+L5957:  LDA  TPOSY+1
+L5959:  STA  TPOSYT+1
+L595C:  LDA  LANGLE                 ;C GET ANGLE DIVISIONS
+L595E:  CLC
+L595F:  ROL
+L5960:  ROL
+L5961:  LDX  TANGLE
+L5963:  JSR  SINXTR
+L5966:  EOR  #$FF
+L5968:  ADC  #$01
+L596A:  STA  BSIN
+L596D:  TXA
+L596E:  EOR  #$FF
+L5970:  ADC  #$00
+L5972:  STA  BSIN+1
+L5975:  LDA  GARBAG                 ;THIS IS CHEATING
+L5977:  LDX  TANGLE
+L5979:  JSR  COSXTR
+L597C:  STA  ACOS
+L597F:  STX  ACOS+1
+L5982:  BIT  LOGO                   ;D IF DISPLAYING LOGL
+L5985:  BPL  ROTATE_33
+L5987:  LDX  #$00
+L5989:  JMP  R10S_
+
+ROTATE_33:
+L598C:  LDA  COLFLG+2               ;D IF IN COLLISION & FLASHING
+L598E:  BEQ  ROTATE_1
+L5990:  JSR  EXPLDE
+
+ROTATE_30:
+L5993:  JMP  R4S_
+
+ROTATE_1:
+L5996:  LDA  TANGLE+2               ;C SET UP ORIENTATION
+L5998:  STA  PTBLO2+1
+L599B:  LDA  #$16
+L599D:  BIT  R2D3FL
+L599F:  BMI  ROTATE_3
+L59A1:  LDX  #$21
+L59A3:  JSR  TR7CHK
+L59A6:  BCS  ROTATE_15
+L59A8:  LDX  #$02
+
+ROTATE_15:
+L59AA:  TXA
+
+ROTATE_3:
+L59AB:  STA  PTBLO2
+L59AE:  LDA  TPOSX+2
+L59B0:  STA  XMATRX
+L59B3:  LDA  TPOSX+3
+L59B5:  STA  XMATRX+1
+L59B8:  LDA  TPOSY+2
+L59BA:  STA  YMATRX
+L59BD:  LDA  TPOSY+3
+L59BF:  STA  YSTRT1
+L59C2:  JSR  ROTPNT                 ;C ROTATE & SELECT
+L59C5:  TYA                         ;D IF TANK NOT IN VIEW
+L59C6:  BEQ  ROTATE_30
+L59C8:  LDA  PTBLO2+1               ;C SET UP ORIENTATION OF TREADS
+L59CB:  STA  PTBLO2+1,Y
+L59CE:  LDA  PTBLX2                 ;C SETUP CENTER POINTS
+L59D1:  STA  PTBLX2,Y
+L59D4:  LDA  PTBLX2+1
+L59D7:  STA  PTBLX2+1,Y
+L59DA:  LDA  PTBLY2
+L59DD:  STA  PTBLY2,Y
+L59E0:  LDA  PTBLY2+1
+L59E3:  STA  PTBLY2+1,Y
+L59E6:  BIT  R2D3FL                 ;D IF TANK, NOT R2D3
+L59E8:  BPL  ROTATE_6
+L59EA:  LDA  TRDCTR+2               ;C DETERMINE EGGZAWST PICTURE
+L59EC:  AND  #$07
+L59EE:  CLC
+L59EF:  ADC  #$24
+L59F1:  BNE  ROTATE_4               ;B
+
+ROTATE_6:
+L59F3:  JSR  TR7CHK                 ;D IF TR7
+L59F6:  BCS  R4S_
+L59F8:  LDA  PTBLO2+1               ;C DETERMINE IF WE SEE FRONT OR BACK
+L59FB:  SEC
+L59FC:  SBC  TANGLE
+L59FE:  CLC
+L59FF:  ADC  #$40                   ;90 DEGREES
+L5A01:  ASL
+L5A02:  LDA  #$04
+L5A04:  BCC  ROTATE_2
+L5A06:  ASL
+
+ROTATE_2:
+L5A07:  STA  TEMP1                  ;C COMPUTE OBJECT #
+L5A09:  LDA  TRDCTR+2
+L5A0B:  AND  #$03
+L5A0D:  CLC
+L5A0E:  ADC  TEMP1
+
+ROTATE_4:
+L5A10:  STA  PTBLO2,Y
+L5A13:  INY
+L5A14:  INY
+L5A15:  BIT  R2D3FL
+L5A17:  BMI  R4S_
+L5A19:  LDA  #$0D                   ;C OUTPUT RADAR ANT.
+L5A1B:  STA  PTBLO2,Y
+L5A1E:  LDA  RANGLE
+L5A20:  STA  PTBLO2+1,Y             ;C ORIENTATION
+L5A23:  LDA  TANGLE                 ;C COMPUTE RELATIVE ORIENTATION
+L5A25:  SEC
+L5A26:  SBC  TANGLE+2
+L5A28:  STA  NTHETA
+L5A2A:  JSR  COS                    ;C COMPUTE CENTER OF RADAR
+L5A2D:  TXA
+L5A2E:  LDX  #$FF
+L5A30:  EOR  #$FF
+L5A32:  BMI  ROTATE_5
+L5A34:  INX
+
+ROTATE_5:
+L5A35:  CLC
+L5A36:  ADC  #$01
+L5A38:  BCC  ROTATE_10
+L5A3A:  INX
+
+ROTATE_10:
+L5A3B:  ASL
+L5A3C:  PHA
+L5A3D:  TXA
+L5A3E:  ROL
+L5A3F:  TAX
+L5A40:  PLA
+
+ROTATE_11:
+L5A41:  CLC
+L5A42:  ADC  PTBLX2
+L5A45:  STA  PTBLX2,Y
+L5A48:  TXA
+L5A49:  ADC  PTBLX2+1
+L5A4C:  STA  PTBLX2+1,Y
+L5A4F:  LDA  NTHETA
+L5A51:  JSR  SIN
+L5A54:  TXA
+L5A55:  ASL
+L5A56:  LDX  #$00
+L5A58:  BCC  ROTATE_21
+L5A5A:  LDX  #$FF
+
+ROTATE_21:
+L5A5C:  CLC
+L5A5D:  ADC  PTBLY2
+L5A60:  STA  PTBLY2,Y
+L5A63:  TXA
+L5A64:  ADC  PTBLY2+1
+L5A67:  STA  PTBLY2+1,Y
+L5A6A:  INY
+L5A6B:  INY
+
+R4S_:
+L5A6C:  LDX  #$02
+
+R5S_:
+L5A6E:  LDA  FIRECT,X               ;D IF SHELL NOT FIRED
+L5A70:  BEQ  R8S_
+L5A72:  LDA  TANGLE,X               ;C SET UP ANGLE
+L5A74:  STA  PTBLO2+1,Y
+L5A77:  LDA  #$03                   ;C SET UP OBJ #
+L5A79:  STA  PTBLO2,Y
+
+R5S__5:
+L5A7C:  LDA  FIRECT,X               ;D IF NOT EXPLODING
+L5A7E:  BPL  R6S_
+;C FIRECT=FIRECT
+L5A80:  CLC
+L5A81:  ADC  #$0F
+L5A83:  BMI  R5S__10
+L5A85:  LDA  #$00                   ;C END EXPLOSION
+L5A87:  STA  FIRECT,X
+L5A89:  BEQ  R8S_                   ;B
+
+R5S__10:
+L5A8B:  STA  FIRECT,X
+L5A8D:  EOR  #$FF
+L5A8F:  CLC
+L5A90:  ADC  PTBLX2+1,Y
+L5A93:  STA  PTBLO2+1,Y
+L5A96:  LDA  #$0E
+L5A98:  STA  PTBLO2,Y
+
+R6S_:
+L5A9B:  LDA  SHELLX,X
+L5A9D:  STA  XMATRX
+L5AA0:  LDA  SHELLX+1,X
+L5AA2:  STA  XMATRX+1
+L5AA5:  LDA  SHELLY,X
+L5AA7:  STA  YMATRX
+L5AAA:  LDA  SHELLY+1,X
+L5AAC:  STA  YSTRT1
+L5AAF:  JSR  ROTPNT                 ;C ROTATE & SELECT
+
+R8S_:
+L5AB2:  DEX
+L5AB3:  DEX
+L5AB4:  BPL  R5S_
+L5AB6:  LDA  SAUCER                 ;D IF NOT SAUCER
+L5AB8:  BEQ  R8S__40
+L5ABA:  LDA  #$20                   ;C ROTATE & SELECT
+L5ABC:  STA  PTBLO2,Y
+L5ABF:  LDA  SCANGL
+L5AC1:  STA  PTBLO2+1,Y
+L5AC4:  LDA  SAPOSX
+L5AC6:  STA  XMATRX
+L5AC9:  LDA  SAPOSX+1
+L5ACB:  STA  XMATRX+1
+L5ACE:  LDA  SAPOSY
+L5AD0:  STA  YMATRX
+L5AD3:  LDA  SAPOSY+1
+L5AD5:  STA  YSTRT1
+L5AD8:  JSR  ROTPNT
+L5ADB:  LDA  PTBLO2-2,Y             ;D IF SAUCER NOT IN VIEW
+L5ADE:  CMP  #$20
+L5AE0:  BNE  R8S__20
+L5AE2:  LDA  #$81                   ;C SET UP SOUND
+L5AE4:  STA  SAUCER
+L5AE6:  BNE  R8S__40
+
+R8S__20:
+L5AE8:  LDA  #$01                   ;C TURN OFF SOUND
+L5AEA:  STA  SAUCER
+
+R8S__40:
+L5AEC:  LDX  #$00
+
+R10S_:
+L5AEE:  LDA  PTBLO1,X               ;D IF END OF TABLE
+L5AF1:  BMI  ROTUND
+L5AF3:  STA  PTBLO2,Y               ;C MOVE OBJECT # TO TABLE
+L5AF6:  LDA  PTBLO1+1,X             ;C MOVE ORENTATION TO TABLE
+L5AF9:  STA  PTBLO2+1,Y
+L5AFC:  LDA  PTBLX1,X
+L5AFF:  STA  XMATRX
+L5B02:  LDA  PTBLX1+1,X
+L5B05:  STA  XMATRX+1
+L5B08:  LDA  PTBLY1,X
+L5B0B:  STA  YMATRX
+L5B0E:  LDA  PTBLY1+1,X
+L5B11:  STA  YSTRT1
+L5B14:  JSR  ROTPNT                 ;C ROTATE & SELECT
+L5B17:  INX                         ;NEXT TABLE LOCATION
+L5B18:  INX
+L5B19:  BNE  R10S_
+
+ROTUND:
+L5B1B:  STA  PTBLO2,Y               ;C INDICATE END OF TBL
+L5B1E:  RTS
+
+;------------------------------------------------------------------------------
+; ROTPNT - ROTPNT - CHECK VALUES PASSED IN X1 & Y1 USING PNTROT. PUT IN TABLE IF
+;   IN VIEW Y=INDEX TO RAM TABLE
+;------------------------------------------------------------------------------
+ROTPNT:
+L5B1F:  JSR  WAIT                   ;C READ MATH BOX
+L5B22:  ASL
+L5B23:  STA  X2
+L5B25:  LDA  MOUTHI
+L5B28:  STA  RSTRT1
+L5B2B:  BMI  ROTPNT_20
+L5B2D:  ROL
+L5B2E:  BMI  ROTPNT_20              ;D IF TOO FAR THROW OUT
+L5B30:  STA  X2+1
+L5B32:  LSR                         ;D IF TOO CLOSE, THROW OUT
+L5B33:  LSR
+L5B34:  BEQ  ROTPNT_20
+L5B36:  LDA  X2+1
+L5B38:  CMP  #$7B                   ;D IF TOO FAR, THROW OUT
+L5B3A:  BCS  ROTPNT_20
+L5B3C:  JSR  WAIT                   ;C READ MATH BOX
+L5B3F:  ASL
+L5B40:  STA  Y2
+L5B42:  LDA  MOUTHI
+L5B45:  ROL
+L5B46:  STA  Y2+1
+L5B48:  LDA  Y2                     ;C ABSOLUTE VALUE OF Y
+L5B4A:  BIT  Y2+1                   ;IF POS, BRANCH
+L5B4C:  BPL  ROTPNT_10
+L5B4E:  CLC
+L5B4F:  EOR  #$FF
+L5B51:  ADC  #$01
+
+ROTPNT_10:
+L5B53:  STA  Y1
+L5B55:  LDA  Y2+1
+L5B57:  BPL  ROTPNT_15
+L5B59:  EOR  #$FF
+L5B5B:  ADC  #$00
+
+ROTPNT_15:
+L5B5D:  STA  Y1+1
+L5B5F:  LDA  Y1                     ;D IF Y >= X
+L5B61:  CMP  X2
+L5B63:  LDA  Y1+1
+L5B65:  SBC  X2+1
+L5B67:  BCS  ROTPNT_20
+L5B69:  LDA  X2                     ;C MOVE TABLE VALUE TO RAM
+L5B6B:  STA  PTBLX2,Y
+L5B6E:  LDA  X2+1
+L5B70:  STA  PTBLX2+1,Y
+L5B73:  LDA  Y2
+L5B75:  STA  PTBLY2,Y
+L5B78:  LDA  Y2+1
+L5B7A:  STA  PTBLY2+1,Y
+L5B7D:  INY
+L5B7E:  INY
+
+ROTPNT_20:
+L5B7F:  RTS
+
+;------------------------------------------------------------------------------
+; WAIT - WAIT: WAIT FOR 2901 MATH BOX & RETURN
+;   LOW BYTE IN A
+;------------------------------------------------------------------------------
+WAIT:
+L5B80:  BIT  MSTAT                  ;D DO WHILE NOT DONE
+L5B83:  BMI  WAIT
+L5B85:  LDA  MOUTLO
+L5B88:  RTS
+
+;------------------------------------------------------------------------------
+; EXPLDE - EXECUTE EXPLOSION SEQUENCE
+;   BLOCK NAME: EXPLDE
+;   DESCRIPTION: UPDATES EXPLOSION PIECES, POSITIONS AND ANGLES
+;   ROTATE & TRANSLATES THEIR CENTER POINTS
+;   RESETS COLLISION FLAG AT TERMINATION OF EXPLOSION SEQUENCE
+;   INPUT PARAMS: EXPOSX,EXPOSY,ZVELOC,EXPTBX,EXPOSO,EXPOSZ
+;   OUTPUT PARAMS: EXPOSX,EXPOSY,ZVELOC,EXPOSO,EXPOSZ,PTBLX2,PTBLY2,PTBLO2,(Y)
+;   REGISTER: A,X,Y
+;   SUBROUTINES: ROTPNT
+;------------------------------------------------------------------------------
+EXPLDE:
+L5B89:  LDX  #$0A                   ;C UPDATE X,Y,Z POSITIONS
+
+EXPLDE_1:
+L5B8B:  LDA  EXPOSZ+1,X
+L5B8E:  CLC
+L5B8F:  BPL  EXPLDE_2
+L5B91:  JMP  EXPLDE_30
+
+EXPLDE_2:
+L5B94:  LDA  EXPOSX,X
+L5B97:  ADC  EXPTBX,X
+L5B9A:  STA  EXPOSX,X
+L5B9D:  STA  XMATRX
+L5BA0:  LDA  EXPOSX+1,X
+L5BA3:  ADC  EXPTBX+1,X
+L5BA6:  STA  EXPOSX+1,X
+L5BA9:  STA  XMATRX+1
+L5BAC:  CLC                         ;Y
+L5BAD:  LDA  EXPOSY,X
+L5BB0:  ADC  EXPTBY,X
+L5BB3:  STA  EXPOSY,X
+L5BB6:  STA  YMATRX
+L5BB9:  LDA  EXPOSY+1,X
+L5BBC:  ADC  EXPTBY+1,X
+L5BBF:  STA  EXPOSY+1,X
+L5BC2:  LDA  ZVELOC,X
+L5BC5:  STA  TEMP1
+L5BC7:  BMI  EXPLDE_5
+L5BC9:  LDA  #$00
+
+EXPLDE_5:
+L5BCB:  BEQ  EXPLDE_6
+L5BCD:  LDA  #$FF
+
+EXPLDE_6:
+L5BCF:  ASL  TEMP1
+L5BD1:  ROL
+L5BD2:  ASL  TEMP1
+L5BD4:  ROL
+L5BD5:  STA  TEMP1+1
+L5BD7:  LDA  EXPOSZ,X               ;Z
+L5BDA:  CLC
+L5BDB:  ADC  TEMP1
+L5BDD:  STA  EXPOSZ,X
+L5BE0:  LDA  TEMP1+1
+L5BE2:  ADC  EXPOSZ+1,X
+L5BE5:  STA  EXPOSZ+1,X
+L5BE8:  LDA  ZVELOC,X               ;D IF ZVELOC MAXED OUT
+L5BEB:  BPL  EXPLDE_8
+L5BED:  CMP  #<[$80-GRAVTY+1]
+L5BEF:  BCC  EXPLDE_10
+
+EXPLDE_8:
+L5BF1:  ADC  #<GRAVTY               ;C UPDATE ZVELOC
+L5BF3:  STA  ZVELOC,X
+
+EXPLDE_10:
+L5BF6:  TXA                         ;C UPDATE ORIENTATION
+L5BF7:  LSR
+L5BF8:  LSR
+L5BF9:  PHP
+L5BFA:  TXA
+L5BFB:  ASL
+L5BFC:  ASL
+L5BFD:  ADC  #$03
+L5BFF:  PLP
+L5C00:  BCC  EXPLDE_20
+L5C02:  STA  TEMP1                  ;DECREMENT
+L5C04:  LDA  EXPOSO,X
+L5C07:  SBC  TEMP1
+L5C09:  JMP  EXPLDE_25
+
+EXPLDE_20:
+L5C0C:  ADC  EXPOSO,X
+
+EXPLDE_25:
+L5C0F:  STA  EXPOSO,X
+L5C12:  STA  PTBLO2+1,Y             ;C SET UP FOR TABLE USE
+L5C15:  TXA
+L5C16:  LSR                         ;C DEVELOP OBJECT #
+L5C17:  CLC
+L5C18:  ADC  #$10
+L5C1A:  BIT  R2D3FL                 ;D IF TANK
+L5C1C:  BPL  EXPLDE_26              ;C DIFFERENT
+L5C1E:  ADC  #$08                   ;FOR R2D3
+L5C20:  BNE  EXPLDE_28              ;B
+
+EXPLDE_26:
+L5C22:  CMP  #$13                   ;D IF NOT RADAR
+L5C24:  BNE  EXPLDE_28
+L5C26:  STA  TEMP1
+L5C28:  JSR  TR7CHK
+L5C2B:  BCC  EXPLDE_27
+L5C2D:  INC  TEMP1
+
+EXPLDE_27:
+L5C2F:  LDA  TEMP1
+
+EXPLDE_28:
+L5C31:  STA  PTBLO2,Y
+L5C34:  LDA  EXPOSY+1,X             ;C START MATRIX MULTIPLY
+L5C37:  STA  YSTRT1
+L5C3A:  JSR  ROTPNT                 ;C ROTATE & SELECT
+
+EXPLDE_30:
+L5C3D:  DEX
+L5C3E:  DEX
+L5C3F:  BMI  EXPLDE_34
+L5C41:  JMP  EXPLDE_1
+
+EXPLDE_34:
+L5C44:  LDX  #$0A                   ;D IF EXPLOSION NOT OVER
+
+EXPLDE_35:
+L5C46:  LDA  EXPOSZ+1,X
+L5C49:  BPL  EXPLDE_40
+L5C4B:  DEX
+L5C4C:  DEX
+L5C4D:  BPL  EXPLDE_35
+L5C4F:  LDA  #$00                   ;C RESET COLLISION FLAG
+L5C51:  STA  COLFLG+2
+L5C53:  TYA
+L5C54:  PHA
+L5C55:  JSR  ROBCHK                 ;C RESET ROBOT POSITION
+L5C58:  PLA
+L5C59:  TAY
+
+EXPLDE_40:
+L5C5A:  RTS
+
+CHKS3:
+L5C5B:  .byte $5E
+
+;------------------------------------------------------------------------------
+; DRAW - DRAW OBJECT
+;   BLOCK NAME: DRAW
+;   DESCRIPTION: DRAW WILL BUILD VECTOR LIST FOR ANY OBJECT FROM VALUES
+;   IN TABLES PNTTBL AND OBJTBL
+;   INPUT PARAMS: A=OBJECT # ,SAVE0=OBJECT, # POINTER
+;   OUTPUT PARAMS: NONE
+;   SUBROUTINES: VGHALT,VGWAIT,VGLABS,VGVCTR,NEWCUR
+;   REGISTERS: A,X,Y
+;------------------------------------------------------------------------------
+DRAW:
+L5C5C:  ASL                         ;C BUILD INDEX TO OBJ TBL
+L5C5D:  TAY
+L5C5E:  LDA  OBJTBL,Y               ;C GET POINTER TO OBJ IN MEM
+L5C61:  STA  TBLPTR
+L5C63:  LDA  OBJTBL+1,Y
+L5C66:  STA  TBLPTR+1
+
+D_TOP:
+L5C68:  LDY  #$00                   ;D IF NOT DONE
+L5C6A:  LDA  (TBLPTR),Y             ;(VALUE FROM TABLE)
+L5C6C:  CMP  #$FF
+L5C6E:  BNE  D_TOP_11
+L5C70:  RTS
+
+D_TOP_11:
+L5C71:  TAX                         ;C DO COMPUTED GO TO
+L5C72:  AND  #$F8                   ;(SAVE INDEX OR VALUE)
+L5C74:  STA  TEMP1
+L5C76:  TXA
+L5C77:  AND  #$07
+L5C79:  ASL
+L5C7A:  TAX
+L5C7B:  LDA  DTAB+1,X
+L5C7E:  PHA
+L5C7F:  LDA  DTAB,X
+L5C82:  PHA
+L5C83:  RTS
+
+DTAB:
+L5C84:  .word D_DOT-1, D_SBRT-1, D_BVCT-1, D_LABS-1
+L5C8C:  .word D_VCTR-1, D_SPCL-1, D_SLIM-1
+
+;------------------------------------------------------------------------------
+; D_DOT - [note] DTAB opcode 0 (dot): draw a blank vector to the point (DOVECT) then a dot at current intensity
+;   (VGDOT), then JMP D_NEXT to fetch the next command byte.
+;------------------------------------------------------------------------------
+D_DOT:
+L5C92:  LDA  #$00                   ;C DRAW BLANK VECTOR TO POINT
+L5C94:  JSR  DOVECT
+L5C97:  LDA  #$20                   ;C DRAW DOT AT CURRENT INTENSITY
+L5C99:  JSR  VGDOT
+L5C9C:  JMP  D_NEXT                 ;B
+
+;------------------------------------------------------------------------------
+; D_SBRT - [note] DTAB opcode 1 (special brightness): for the logo or a saucer in collision, use SINT as the
+;   brightness; otherwise brightness = TEMP1-DQUE clamped to $30 (fades with depth); either way
+;   JSR VGSTAT with no clip window, then D_NEXT.
+;------------------------------------------------------------------------------
+D_SBRT:
+L5C9F:  LDX  SAVE0                  ;D IF NOT SAUCER
+L5CA1:  LDA  PTBLO2,X
+L5CA4:  CMP  #$17                   ;D IF LOGO
+L5CA6:  BEQ  D_SBRT_5
+L5CA8:  CMP  #$1E
+L5CAA:  BEQ  D_SBRT_5
+L5CAC:  CMP  #$1F
+L5CAE:  BEQ  D_SBRT_5
+L5CB0:  CMP  #$20                   ;D IF NOT SAUCER
+L5CB2:  BNE  D_SBRT_10
+L5CB4:  LDA  SCOLFG                 ;D IF NOT IN COLLISION
+L5CB6:  BEQ  D_SBRT_10
+
+D_SBRT_5:
+L5CB8:  LDA  SINT
+L5CBB:  JMP  D_SBRT_15
+
+D_SBRT_10:
+L5CBE:  LDA  TEMP1                  ;C GET BRITNESS
+L5CC0:  SEC
+L5CC1:  SBC  DQUE
+L5CC3:  BCC  D_SBRT_12
+L5CC5:  CMP  #$30
+L5CC7:  BCS  D_SBRT_15
+
+D_SBRT_12:
+L5CC9:  LDA  #$30
+
+D_SBRT_15:
+L5CCB:  TAY                         ;C SET BRITNESS REGISTER
+L5CCC:  LDA  #$04                   ;NO CLIPPING WINDOW
+L5CCE:  JSR  VGSTAT
+L5CD1:  JMP  D_NEXT
+
+;------------------------------------------------------------------------------
+; D_LABS - [note] DTAB opcode 3 (reset beam): zero CURNTX/CURNTY and VGCNTR (re-centre the beam), then falls into
+;   D_BVCT to draw a blank vector from there.
+;------------------------------------------------------------------------------
+D_LABS:
+L5CD4:  LDA  #$00                   ;C RESET CURRENT X&Y
+L5CD6:  STA  CURNTX
+L5CD8:  STA  CURNTX+1
+L5CDA:  STA  CURNTY
+L5CDC:  STA  CURNTY+1
+L5CDE:  JSR  VGCNTR                 ;C MOVE BEAM
+
+;------------------------------------------------------------------------------
+; D_BVCT - [note] DTAB opcode 2 (blank vector): draw an invisible vector to the next point; shares DOVECT/D_NEXT
+;   with D_VCTR via D_VCT1.
+;------------------------------------------------------------------------------
+D_BVCT:
+L5CE1:  LDA  #$00                   ;C DRAW BLANK VECTOR
+L5CE3:  BEQ  D_VCT1                 ;B
+
+;------------------------------------------------------------------------------
+; D_VCTR - [note] DTAB opcode 4 (visible vector): draw at brightness $20 to the next point; shares DOVECT/D_NEXT
+;   with D_BVCT via D_VCT1.
+;------------------------------------------------------------------------------
+D_VCTR:
+L5CE5:  LDA  #$20                   ;C DRAW AT CURRENT BRITHNESS
+
+D_VCT1:
+L5CE7:  JSR  DOVECT
+L5CEA:  JMP  D_NEXT                 ;B
+
+;------------------------------------------------------------------------------
+; D_SPCL - [note] DTAB opcode 5 (special/explosion picture): build the scale factor from the object table's
+;   linear + power-of-2 scale byte (PTBLO2+1), JSRL the explosion picture EXPIC, reset scale to 1,
+;   then falls into D_SLIM's JMP D_NEXT to fetch the next command byte.
+;------------------------------------------------------------------------------
+D_SPCL:
+L5CED:  LDX  SAVE0                  ;C SPECIAL COUNTER
+L5CEF:  LDA  PTBLO2+1,X
+L5CF2:  TAX                         ;C SET UP SCALING
+L5CF3:  AND  #$3F
+L5CF5:  ASL
+L5CF6:  TAY                         ;LINEAR
+L5CF7:  TXA
+L5CF8:  AND  #$C0
+L5CFA:  ASL
+L5CFB:  ROL
+L5CFC:  ROL
+L5CFD:  ADC  #$01                   ;POWER OF 2
+L5CFF:  JSR  VGSCAL                 ;C SET SCALE FACTOR
+L5D02:  LDX  #<EXPIC                ;LXL EXPIC  C OUTPUT EXPLOSION PICTURE
+L5D04:  LDA  #>EXPIC                ;LAH EXPIC
+L5D06:  JSR  VGJSRL
+L5D09:  LDA  #$01                   ;C RESET SCALE
+L5D0B:  JSR  VGSCA1
+
+;------------------------------------------------------------------------------
+; D_SLIM - [note] DTAB opcode 6 (limit, no-op): JMP D_NEXT - reached either as its own command byte or by
+;   falling through from D_SPCL above.
+;------------------------------------------------------------------------------
+D_SLIM:
+L5D0E:  JMP  D_NEXT                 ;B
+
+;------------------------------------------------------------------------------
+; DOVECT - [note] Draw one vector of the object at brightness A (saved to VGBRIT): compute the delta from
+;   CURNTX/CURNTY to the next PNTTBL point and JSR VGVTR2 to add it to the vector list.  Called
+;   from D_DOT directly and from D_VCT1 (shared entry for D_BVCT/D_VCTR) - the two DTAB entries
+;   that draw an actual vector; D_SBRT/D_SPCL/D_LABS/D_SLIM don't call it.
+;------------------------------------------------------------------------------
+DOVECT:
+L5D11:  STA  VGBRIT                 ;C SET BRITNESS
+L5D13:  LDA  TEMP1                  ;C GET INDEX
+L5D15:  LSR
+L5D16:  TAX
+L5D17:  LDA  PNTTBL,X               ;C COMPUTE DELTA
+L5D19:  TAY
+L5D1A:  SEC
+L5D1B:  SBC  CURNTX
+L5D1D:  STA  XCOMP
+L5D1F:  STY  CURNTX                 ;SAVE NEW CURRENT
+L5D21:  LDA  PNTTBL+1,X
+L5D23:  TAY
+L5D24:  SBC  CURNTX+1
+L5D26:  STA  XCOMP+1
+L5D28:  STY  CURNTX+1
+L5D2A:  SEC                         ;C COMPUTE DELTA Y
+L5D2B:  LDA  PNTTBL+2,X
+L5D2D:  TAY
+L5D2E:  SBC  CURNTY
+L5D30:  STA  XCOMP+2
+L5D32:  STY  CURNTY                 ;SAVE NEW CURRENT
+L5D34:  LDA  PNTTBL+3,X
+L5D36:  TAY
+L5D37:  SBC  CURNTY+1
+L5D39:  STA  XCOMP+3
+L5D3B:  STY  CURNTY+1
+L5D3D:  JSR  VGVTR2                 ;C ADD VCTR TO VGLIST
+L5D40:  RTS
+
+;------------------------------------------------------------------------------
+; D_NEXT - B  (comment at the calls)
+;------------------------------------------------------------------------------
+D_NEXT:
+L5D41:  INC  TBLPTR                 ;C GET NEXT COMMAND
+L5D43:  BNE  D_NEXT_10
+L5D45:  INC  TBLPTR+1
+
+D_NEXT_10:
+L5D47:  JMP  D_TOP
+
+;------------------------------------------------------------------------------
+; PNTPUT - PUT PROJECTED POINTS IN TABLE
+;   BLOCK NAME: PNTPUT
+;   DESCRIPTION: THIS ROUTINE WILL GENERATE THE POINTS USED TO DRAW AN
+;   OBJECT AND MOVE THEM TO THE POINT TABLE.
+;   INPUT PARAMS: THETA=ANGLE OF VIEW
+;   X=POINTER TO CENTER POINT OF OBJECT
+;   OUTPUT PARAMS: POINT TABLE (PNTTBL),TBLPTR,NOPNTS
+;   SUBROUTINES: PNTROT,PROJPT,DIVIDE,KLUDGE
+;   REGISTERS: A,X,Y
+;------------------------------------------------------------------------------
+PNTPUT:
+L5D4A:  STX  SAVE1                  ;C SAVE INDEX
+L5D4C:  LDA  TANGLE                 ;C COMPUTE RELATIVE ORIENTATION
+L5D4E:  SEC
+L5D4F:  SBC  PTBLO2+1,X
+L5D52:  EOR  #$80
+L5D54:  STA  NTHETA
+L5D56:  JSR  SIN
+L5D59:  STA  BSIN
+L5D5C:  STX  BSIN+1
+L5D5F:  LDA  NTHETA
+L5D61:  JSR  COS
+L5D64:  CLC
+L5D65:  EOR  #$FF
+L5D67:  ADC  #$01
+L5D69:  STA  ACOS
+L5D6C:  TXA
+L5D6D:  EOR  #$FF
+L5D6F:  ADC  #$00
+L5D71:  STA  ACOS+1
+L5D74:  LDX  SAVE1
+L5D76:  LDA  PTBLO2,X               ;C SET UP TABLE POINTER
+L5D79:  ASL
+L5D7A:  TAY
+L5D7B:  LDA  OBJPNT,Y
+L5D7E:  STA  TBLPTR
+L5D80:  LDA  OBJPNT+1,Y
+L5D83:  STA  TBLPTR+1
+L5D85:  LDA  PTBLX2,X
+L5D88:  STA  TPOSXT
+L5D8B:  LDA  PTBLX2+1,X
+L5D8E:  STA  TPOSXT+1
+L5D91:  AND  #$F0
+L5D93:  STA  DQUE
+L5D95:  LDA  PTBLY2,X
+L5D98:  STA  TPOSYT
+L5D9B:  LDA  PTBLY2+1,X
+L5D9E:  STA  TPOSYT+1
+L5DA1:  LDX  #$00                   ;C INITIALIZE INDICES
+L5DA3:  STX  ZLOW
+L5DA6:  STX  ZHI
+L5DA9:  STX  SAVE3                  ;OBJECT POINT TABLE
+L5DAB:  INC  SAVE3
+
+PNTPUT_10:
+L5DAD:  LDY  SAVE3                  ;C SET UP DELTA X
+L5DAF:  LDA  (TBLPTR),Y
+L5DB1:  STA  XMATRX
+L5DB4:  INY
+L5DB5:  LDA  (TBLPTR),Y
+L5DB7:  STA  XMATRX+1
+L5DBA:  INY                         ;C SET UP DELTA Y
+L5DBB:  LDA  (TBLPTR),Y
+L5DBD:  STA  YMATRX
+L5DC0:  INY
+L5DC1:  LDA  (TBLPTR),Y
+L5DC3:  STA  YSTRT2
+L5DC6:  INY
+L5DC7:  JSR  WAIT
+L5DCA:  CLC
+L5DCB:  EOR  #$FF
+L5DCD:  ADC  #$01
+L5DCF:  STA  PNTTBL,X               ;C MOVE X COORD TO TABLE
+L5DD1:  LDA  MOUTHI
+L5DD4:  EOR  #$FF
+L5DD6:  ADC  #$00
+L5DD8:  STA  PNTTBL+1,X
+L5DDA:  LDA  (TBLPTR),Y
+L5DDC:  STA  DDEND
+L5DDE:  INY
+L5DDF:  LDA  (TBLPTR),Y
+L5DE1:  INY
+L5DE2:  STY  SAVE3
+L5DE4:  STA  DDEND+1
+L5DE6:  STX  SAVE2
+L5DE8:  JSR  KLUDGE
+L5DEB:  JSR  WAIT
+L5DEE:  LDX  SAVE2
+L5DF0:  STA  PNTTBL+2,X
+L5DF2:  LDA  MOUTHI
+L5DF5:  STA  PNTTBL+3,X
+L5DF7:  TYA
+L5DF8:  LDY  #$00
+L5DFA:  CMP  (TBLPTR),Y
+L5DFC:  BCS  PNTPUT_20
+L5DFE:  INX
+L5DFF:  INX
+L5E00:  INX
+L5E01:  INX
+L5E02:  BNE  PNTPUT_10              ;B
+
+PNTPUT_20:
+L5E04:  RTS
+
+;------------------------------------------------------------------------------
+; KLUDGE - KLUDGE MOVEMENT IN Z-AXIS
+;   BLOCK NAME: KLUDGE
+;   DESCRIPTION: WILL ADD APPROPRIATE Z OFFSET FOR EXPLOSION OBJECTS
+;   INPUT PARAMS: DDEND,PTBLO2,EXPOSZ
+;   OUTPUT PARAMS: DDEND
+;   REGISTERS: A,X
+;------------------------------------------------------------------------------
+KLUDGE:
+L5E05:  LDX  SAVE1                  ;D IF NOT EXPLOSION OBJECT
+L5E07:  LDA  PTBLO2,X
+L5E0A:  AND  #$10
+L5E0C:  BEQ  KLUDGE_20
+L5E0E:  LDA  PTBLO2,X               ;C CONVERT TO EXPLOSION PIECE #
+L5E11:  AND  #$07
+
+KLUDGE_10:
+L5E13:  ASL
+L5E14:  TAX
+L5E15:  LDA  EXPOSZ,X               ;C ADD IN Z OFFSET
+L5E18:  ADC  DDEND
+L5E1A:  STA  DDEND
+L5E1C:  LDA  EXPOSZ+1,X
+L5E1F:  ADC  DDEND+1
+L5E21:  STA  DDEND+1
+
+KLUDGE_20:
+L5E23:  LDA  BOUNCE
+L5E25:  BEQ  KLUDGE_30
+L5E27:  SEC
+L5E28:  LDA  DDEND
+L5E2A:  SBC  BOUNCE
+L5E2C:  STA  DIVOUT
+L5E2F:  LDA  DDEND+1
+L5E31:  SBC  #$00
+L5E33:  JMP  KLUDGE_40
+
+KLUDGE_30:
+L5E36:  LDA  DDEND
+L5E38:  STA  DIVOUT
+L5E3B:  LDA  DDEND+1
+
+KLUDGE_40:
+L5E3D:  STA  DIVOUT+1
+L5E40:  STA  ZDIV                   ;C START DIVIDE
+L5E43:  RTS
+
+;------------------------------------------------------------------------------
+; BOUND - BOUNCE CONTROL
+;   BLOCK NAME: BOUND
+;   DESCRIPTION: THIS ROUTINE WILL CONTROL BOUNCE
+;   INPUT PARAMS: BOUNCE,BCOUNT
+;   OUTPUT PARAMS: BOUNCE,BCOUNT
+;   REGISTERS: A
+;------------------------------------------------------------------------------
+BOUND:
+L5E44:  LDA  BOUNCE                 ;D IF NO BOUNCE
+L5E46:  BEQ  BOUND_20
+L5E48:  LSR  BOUNCE                 ;C LOWER BOUNCE
+
+BOUND_20:
+L5E4A:  RTS
+
+;------------------------------------------------------------------------------
+; COS - SIN-COS ROUTINES
+;   BLOCK NAME: COS
+;   DESCRIPTION: SIN & COS WILL ACCEPT 8 BITS OF ANGLE & RETURN 16 BITS OF
+;   SIN OR COS IN REGISTERS A & X (A IS LOW ORDER)
+;   INPUT PARAMS: (A)=ANGLE (0 TO FF REPRESENTS 0 TO 360 DEGREES)
+;   (CC)=MINUS/PLUS FLAG SET CORRECTLY
+;   OUTPUT PARAMS: (A)=LOW ORDER BYTE OF SIN/COS
+;   (X)=HIGH " "
+;   REGISTERS USED:A,X
+;------------------------------------------------------------------------------
+COS:
+L5E4B:  CLC                         ;C COS(A)=SIN(A+PI/2)
+L5E4C:  ADC  #$40
+
+;------------------------------------------------------------------------------
+; SIN - C SIN OF ANGLE  (comment at the call)
+;   C SIN (ANGLE)/2  (another call)
+;   C SIN/2  (another call)
+;------------------------------------------------------------------------------
+SIN:
+L5E4E:  BPL  SIN1                   ;D IF PI>ANGLE>-0
+L5E50:  AND  #$7F
+L5E52:  JSR  SIN1                   ;C SIN(A) WHEN PI>A>=0
+L5E55:  EOR  #$FF
+L5E57:  CLC
+L5E58:  ADC  #$01
+L5E5A:  PHA
+L5E5B:  TXA
+L5E5C:  EOR  #$FF
+L5E5E:  ADC  #$00
+L5E60:  TAX
+L5E61:  PLA
+L5E62:  RTS
+
+;------------------------------------------------------------------------------
+; SIN1 - C SIN(A) WHEN PI>A>=0  (comment at the call)
+;------------------------------------------------------------------------------
+SIN1:
+L5E63:  CMP  #$41                   ;D IF PI/2 >-ANGLE >-0
+L5E65:  BCC  SIN1_10
+L5E67:  EOR  #$7F                   ;C SIN(PI/2+A)=SIN(PI/2-A)
+L5E69:  ADC  #$00
+
+SIN1_10:
+L5E6B:  ASL
+L5E6C:  TAX
+L5E6D:  LDA  $5E77,X                ;(src: LDA AX,99$)  LOW ORDER
+L5E70:  PHA
+L5E71:  LDA  $5E78,X                ;(src: LDA AX,99$+1)  HIGH ORDER
+L5E74:  TAX
+L5E75:  PLA
+L5E76:  RTS
+
+SIN1_99:
+L5E77:  .word $0000, $0324, $0647, $096A
+L5E7F:  .word $0C8B, $0FAB, $12C8, $15E2
+L5E87:  .word $18F8, $1C0B, $1F19, $2223
+L5E8F:  .word $2528, $2826, $2B1F, $2E11
+L5E97:  .word $30FB, $33DE, $36BE, $398C
+L5E9F:  .word $3C56, $3F17, $41CE, $447A
+L5EA7:  .word $471C, $49B4, $4C3F, $4EBF
+L5EAF:  .word $5133, $539B, $55F5, $5842
+L5EB7:  .word $5A82, $5CB4, $5ED7, $60EC
+L5EBF:  .word $62F2, $64EB, $66CF, $68A6
+L5EC7:  .word $6A6D, $6C24, $6DC4, $6F5F
+L5ECF:  .word $70E2, $7255, $73B5, $7504
+L5ED7:  .word $7641, $776C, $7884, $798A
+L5EDF:  .word $7A7D, $7B5D, $7C2A, $7CE3
+L5EE7:  .word $7D8A, $7E1D, $7E9D, $7F09
+L5EEF:  .word $7F62, $7FA7, $7FD8, $7FF6
+L5EF7:  .word $7FFF
+
+;------------------------------------------------------------------------------
+; COSXTR - EXTRAPOLATE SIN & COS
+;   BLOCK NAME: COSXTR
+;   DESCRIPTION: WILL EXTRAPOLATE SIN & COS TO AN EXTRA 2 DIVISIONS
+;   BETWEEN EACH ANGLE
+;   INPUT PARAMS: (X)=ANGLE
+;   (A)=DIVISION OF ANGLE (0 TO 1)
+;   OUTPUT PARAMS: (A)=LOW ORDER BYTE SIN/COS
+;   (X)=HIGH " "
+;   GARBAG
+;   REGS: A,X
+;------------------------------------------------------------------------------
+COSXTR:
+L5EF9:  AND  #$01                   ;D IF DIV D0
+L5EFB:  STA  GARBAG
+L5EFD:  BNE  COSXTR_10
+L5EFF:  TXA                         ;C GIVE 'EM COS
+L5F00:  JMP  COS
+
+COSXTR_10:
+L5F03:  TXA                         ;L GET HI BYTE OF ANGLE
+L5F04:  STA  TEMP3                  ;C SAVE ANGLE
+L5F06:  JSR  COS                    ;C COS OF ANGLE
+L5F09:  STA  TEMP1
+L5F0B:  STX  TEMP1+1
+L5F0D:  INC  TEMP3                  ;C COS OF NEXT ANGLE
+L5F0F:  LDA  TEMP3
+L5F11:  JSR  COS
+L5F14:  JMP  XTRAP                  ;B
+
+;------------------------------------------------------------------------------
+; SINXTR - [note] Sine counterpart of COSXTR above (same block, same interpolation): extrapolate SIN between the
+;   table's angle steps by the division fraction in A; shares the correction code at XTRAP.
+;------------------------------------------------------------------------------
+SINXTR:
+L5F17:  AND  #$01                   ;D IF DIV>0
+L5F19:  STA  GARBAG
+L5F1B:  BNE  SINXTR_10
+L5F1D:  TXA                         ;C GIVE 'EM SIN
+L5F1E:  JMP  SIN
+
+SINXTR_10:
+L5F21:  TXA
+L5F22:  STA  TEMP3
+L5F24:  JSR  SIN                    ;C SIN OF ANGLE
+L5F27:  STA  TEMP1
+L5F29:  STX  TEMP1+1
+L5F2B:  INC  TEMP3                  ;C SIN OF NEXT ANGLE
+L5F2D:  LDA  TEMP3
+L5F2F:  JSR  SIN
+
+XTRAP:
+L5F32:  SEC                         ;C COMPUTE DIFFERENCE
+L5F33:  SBC  TEMP1
+L5F35:  STA  TEMP2
+L5F37:  TXA
+L5F38:  SBC  TEMP1+1
+L5F3A:  CMP  #$80                   ;C DIVIDE BY 2
+L5F3C:  ROR
+L5F3D:  ROR  TEMP2
+L5F3F:  STA  TEMP2+1
+
+XTRAP_10:
+L5F41:  LDA  TEMP1                  ;C ADD IN DIFFERENCE CORRECTLY
+L5F43:  CLC
+L5F44:  ADC  TEMP2
+L5F46:  PHA
+L5F47:  LDA  TEMP1+1
+L5F49:  ADC  TEMP2+1
+L5F4B:  TAX                         ;L GET VALUES IN REGS
+L5F4C:  PLA
+L5F4D:  RTS
+
+;------------------------------------------------------------------------------
+; QWIKCK - QUICK ROBOT-SHELL COLLISION CHECK - QWIKCK
+;   QWIKCK DOES A QUICK COLLISION CHECK FOR PLAYER'S
+;   SHELL VS. ROBOT ONLY.
+;   SHRTCK DOES THE SAME CHECK, BUT FOR EITHER PLAYER'S
+;   SHELL VS. ROBOT, OR FOR ROBOT'S SHELL VS. PLAYER.
+;   SHRTCK REQUIRES X AND Y TO BE SET UP PROPERLY.
+;   CC - NO COLLISION
+;   CS - CLLISION -- APPROPRIATE FLAGS & COUNTERS ARE SET
+;------------------------------------------------------------------------------
+QWIKCK:
+L5F4E:  LDA  FIRECT                 ;D IF NO SHELL
+L5F50:  BMI  QWIKCK_5
+L5F52:  BNE  QWIKCK_10
+
+QWIKCK_5:
+L5F54:  JMP  Q_20S_
+
+QWIKCK_10:
+L5F57:  LDX  #$00                   ;L SET UP FOR SHRTCK
+L5F59:  LDY  #$02                   ;FALL THROUGH
+
+;------------------------------------------------------------------------------
+; SHRTCK - C SETUP MATH BOX AND DO TANK-SHELL COLCHK  (comment at the call)
+;------------------------------------------------------------------------------
+SHRTCK:
+L5F5B:  LDA  SHELLX,X               ;C SET UP FOR DISTANCE
+L5F5D:  STA  ACOS
+L5F60:  LDA  SHELLX+1,X
+L5F62:  STA  ACOS+1
+L5F65:  LDA  SHELLY,X
+L5F67:  STA  BSIN
+L5F6A:  LDA  SHELLY+1,X
+L5F6C:  STA  BSIN+1
+L5F6F:  .byte $B9, $12, $00         ;LDA COLFLG,Y (forced absolute)
+L5F72:  BNE  SHRTCK_16
+L5F74:  .byte $B9, $2D, $00         ;LDA TPOSX,Y (forced absolute)  C GET PROXIMITY TO SHELL
+L5F77:  STA  TPOSXT
+L5F7A:  .byte $B9, $2E, $00         ;LDA TPOSX+1,Y (forced absolute)
+L5F7D:  STA  TPOSXT+1
+L5F80:  .byte $B9, $31, $00         ;LDA TPOSY,Y (forced absolute)
+L5F83:  STA  TPOSYT
+L5F86:  .byte $B9, $32, $00         ;LDA TPOSY+1,Y (forced absolute)
+L5F89:  STA  DSTNCE
+L5F8C:  CMP  ($00,X)                ;WASTE TIME
+L5F8E:  LDA  ($00),Y
+L5F90:  LDA  MOUTLO
+L5F93:  STA  TEMP3
+L5F95:  LDA  MOUTHI
+L5F98:  BMI  SHRTCK_22
+L5F9A:  LSR
+L5F9B:  ROR  TEMP3
+L5F9D:  LSR
+
+SHRTCK_16:
+L5F9E:  BNE  SHRTCK_22
+L5FA0:  ROR  TEMP3
+L5FA2:  BIT  R2D3FL                 ;D IF NOT R2D3
+L5FA4:  BPL  SHRTCK_17
+L5FA6:  LDA  EXPOSZ+$C              ;D IF TOO HIGH UP
+L5FA9:  CMP  #TOP&$FF
+L5FAB:  LDA  EXPOSZ+$D
+L5FAE:  SBC  #TOP/$100
+L5FB0:  BCS  SHRTCK_22
+
+SHRTCK_17:
+L5FB2:  LDA  TANGLE
+L5FB4:  SEC
+L5FB5:  SBC  TANGLE+2
+L5FB7:  ASL
+L5FB8:  BPL  SHRTCK_30
+L5FBA:  EOR  #$FF
+L5FBC:  CLC
+L5FBD:  ADC  #$01
+
+SHRTCK_30:
+L5FBF:  LSR
+L5FC0:  LSR
+L5FC1:  BIT  R2D3FL
+L5FC3:  BMI  SHRTCK_35
+L5FC5:  LSR
+L5FC6:  BPL  SHRTCK_36
+
+SHRTCK_35:
+L5FC8:  CLC
+L5FC9:  ADC  #$18
+
+SHRTCK_36:
+L5FCB:  STA  TEMP1
+L5FCD:  LSR
+L5FCE:  CLC
+L5FCF:  ADC  TEMP1
+L5FD1:  ADC  #$38
+L5FD3:  STA  TEMP1
+L5FD5:  CMP  TEMP3
+L5FD7:  BCS  SHRTCK_38
+
+SHRTCK_22:
+L5FD9:  JMP  Q_20S_
+
+SHRTCK_38:
+L5FDC:  LDA  #$20                   ;C INDICATE COLLISION
+L5FDE:  .byte $99, $12, $00         ;STA COLFLG,Y (forced absolute)
+L5FE1:  LDA  #$00                   ;C RESET TIMER
+L5FE3:  STA  TIMOUT
+L5FE5:  TYA                         ;D IF NOT PLAYER
+L5FE6:  BNE  SHRTCK_18
+L5FE8:  LDA  #$02                   ;C CRACK WINDSHIELD
+L5FEA:  STA  CRACK
+L5FEC:  LDA  #$FF
+L5FEE:  STA  BOUNCE
+L5FF0:  DEC  LIVES                  ;D IF GAME NOT OVER
+L5FF2:  BNE  SHRTCK_18
+L5FF4:  INC  GOVER                  ;C INDICATE GAME OVER
+
+SHRTCK_18:
+L5FF6:  LDA  HITS,X                 ;C SAVE CURRENT SCORE
+L5FF8:  STA  TEMP1
+L5FFA:  LDA  HITS+1,X
+L5FFC:  STA  TEMP1+1
+L5FFE:  TXA                         ;D IF ROBOT
+L5FFF:  BNE  SHRTCK_4
+L6001:  LDA  #$02
+L6003:  BIT  R2D3FL                 ;D IF NOT R2D3
+L6005:  BMI  SHRTCK_90
+L6007:  JSR  TR7CHK                 ;D IF TR7
+L600A:  LDA  #$03
+L600C:  BCS  SHRTCK_90
+
+SHRTCK_4:
+L600E:  LDA  #$01                   ;C ADD 1 OTHERWISE
+
+SHRTCK_90:
+L6010:  CLC
+L6011:  SED
+L6012:  ADC  HITS,X
+L6014:  STA  HITS,X
+
+SHRTCK_6:
+L6016:  LDA  HITS+1,X
+L6018:  ADC  #$00
+L601A:  CLD
+L601B:  STA  HITS+1,X
+L601D:  TXA                         ;D IF ROBOT
+L601E:  BNE  SHRTCK_19
+L6020:  JSR  NEWLIF                 ;C GIVE-A-LIFE -- SAVE-A-FRIEND
+
+SHRTCK_19:
+L6023:  LDA  #$80                   ;C EXPLODE SHELL
+L6025:  STA  FIRECT,X
+L6027:  LDA  #$FF                   ;C BIG EXPLOSION IN TANK HIT
+L6029:  .byte $99, $0F, $00         ;STA EXPCNT,Y (forced absolute)
+L602C:  LDA  #LOX
+L602E:  .byte $19, $15, $00         ;ORA SNDWRD,Y (forced absolute)
+L6031:  .byte $99, $15, $00         ;STA SNDWRD,Y (forced absolute)
+L6034:  LDA  SNDWRD,X
+L6036:  AND  #HIX
+L6038:  STA  SNDWRD,X
+L603A:  JSR  EXINIT
+L603D:  LDA  #$70                   ;C SMALL EXPLOSION IN OTHER TANK
+L603F:  STA  EXPCNT,X
+L6041:  SEC                         ;L TELL THEM COLLISION
+L6042:  RTS
+
+;------------------------------------------------------------------------------
+; Q_20S_ - [note] QWIKCK/SHRTCK's no-collision exit: CLC then RTS - the source's own comment on this line reads
+;   "TELL 'EM NO - NO - NO, NO-NO-NO-NO-NO!".
+;------------------------------------------------------------------------------
+Q_20S_:
+L6043:  CLC                         ;L TELL 'EM NO - NO - NO , NO-NO-NO-NO-NO!
+L6044:  RTS
+
+;------------------------------------------------------------------------------
+; COLCHK - COLLISION CHECK
+;   BLOCK NAME: COLCHK
+;   DESCRIPTION: WILL CHECK FOR COLLISION BETWEEN SHELLS AND OBJECTS
+;   INPUT PARAMS: SHELLX & SHELLY & TPOSX & TPOSY & PLAYFIELD TBL
+;   OUTPUT PARAMS: FIRECT ZEROED ON COLLISION, COLFLG SET FOR TANK COLLISION,
+;   EXPCNT SET FOR ALL EXPLOSIONS
+;   SUBROUTINES: ABSTMP,EXINIT
+;   REGISTERS: A,X,Y
+;------------------------------------------------------------------------------
+COLCHK:
+L6045:  LDX  #$02                   ;START WITH 2ND SHELL
+
+C_10S_:
+L6047:  TXA                         ;C INDEX TO OTHER TANK
+L6048:  EOR  #$02
+L604A:  TAY
+L604B:  LDA  FIRECT,X               ;D IF NO SHELL FIRED
+L604D:  BMI  C_60S_
+L604F:  BEQ  C_60S_
+
+C_10S__15:
+L6051:  LDA  CRACK
+L6053:  BNE  C_10S__5
+L6055:  LDA  GOVER
+L6057:  BNE  C_60S_
+
+C_10S__5:
+L6059:  JSR  SHRTCK                 ;C SETUP MATH BOX AND DO TANK-SHELL COLCHK
+L605C:  BCS  C_60S_                 ;D IF COLLISION
+L605E:  JMP  SAUCHK
+
+;------------------------------------------------------------------------------
+; C_21S_ - [note] COLCHK: scan the playfield obstacle table (PTBLO1/PTBLX1/PTBLY1 - fixed ROM scenery, not the
+;   tank) for a shell hit: Mathbox square-root distance in TEMP3 compared with PRXTBL[object
+;   type]; a hit explodes shell X (FIRECT,X=$A0) and starts its sound.  C_60S_ then switches to
+;   the other shell (DEX,DEX) and loops back through C_10S_ until both are checked.
+;------------------------------------------------------------------------------
+C_21S_:
+L6061:  LDY  #$00
+
+C_21S__21:
+L6063:  LDA  PTBLO1,Y               ;D IF DONE
+L6066:  BMI  C_60S_
+L6068:  LDA  PTBLX1,Y               ;C GET PROXIMITY TO OBJECT
+L606B:  STA  TPOSXT
+L606E:  LDA  PTBLX1+1,Y
+L6071:  STA  TPOSXT+1
+L6074:  LDA  PTBLY1,Y
+L6077:  STA  TPOSYT
+L607A:  LDA  PTBLY1+1,Y
+L607D:  STA  DSTNCE
+L6080:  CMP  ($00,X)                ;WASTE TIME
+L6082:  LDA  MOUTLO
+L6085:  STA  TEMP3
+L6087:  LDA  MOUTHI
+L608A:  CMP  #$80
+L608C:  ROR
+L608D:  ROR  TEMP3
+L608F:  CMP  #$80
+L6091:  ROR
+L6092:  ROR  TEMP3
+L6094:  CMP  #$00                   ;D IF TOO FAR
+L6096:  BNE  C_21S__40
+L6098:  STX  GARBAG
+L609A:  LDX  PTBLO1,Y
+L609D:  LDA  PRXTBL,X
+L60A0:  LDX  GARBAG
+L60A2:  CMP  TEMP3
+L60A4:  BCC  C_21S__40
+L60A6:  LDA  #$A0                   ;C EXPLODE SHELL
+L60A8:  STA  FIRECT,X
+L60AA:  LDA  #$70                   ;C TURN ON SOUND SHORT
+L60AC:  STA  EXPCNT
+L60AE:  LDA  SNDWRD
+L60B0:  AND  #HIX
+L60B2:  STA  SNDWRD
+L60B4:  BCS  C_60S_
+
+C_21S__40:
+L60B6:  INY
+L60B7:  INY
+L60B8:  BNE  C_21S__21
+
+C_60S_:
+L60BA:  DEX
+L60BB:  DEX
+L60BC:  BNE  C_60S__61
+L60BE:  JMP  C_10S_
+
+C_60S__61:
+L60C1:  RTS
+
+;------------------------------------------------------------------------------
+; SAUCHK - [note] COLCHK: check the saucer for a shell hit the same way (distance from SAPOSX/SAPOSY through the
+;   Mathbox, DSTNCE/MOUTLO/MOUTHI), then falls into C_21S_ to scan the playfield obstacle table too.
+;------------------------------------------------------------------------------
+SAUCHK:
+L60C2:  LDA  SAUCER
+L60C4:  BEQ  SAUCHK_10
+L60C6:  LDA  SCOLFG
+L60C8:  BNE  SAUCHK_10
+L60CA:  LDA  SAPOSX                 ;C GET DISTANCE TO SAUCEX
+L60CC:  STA  TPOSXT
+L60CF:  LDA  SAPOSX+1
+L60D1:  STA  TPOSXT+1
+L60D4:  LDA  SAPOSY
+L60D6:  STA  TPOSYT
+L60D9:  LDA  SAPOSY+1
+L60DB:  STA  TPOSYT+1
+L60DE:  STA  DSTNCE
+L60E1:  CMP  ($00,X)
+L60E3:  LDA  MOUTLO
+L60E6:  STA  TEMP3
+L60E8:  LDA  MOUTHI
+L60EB:  CMP  #$80
+L60ED:  ROR
+L60EE:  ROR  TEMP3
+L60F0:  CMP  #$80
+L60F2:  ROR
+L60F3:  ROR  TEMP3
+L60F5:  CMP  #$00                   ;D IF TOO FAR
+L60F7:  BEQ  SAUCHK_20
+
+SAUCHK_10:
+L60F9:  JMP  C_21S_
+
+SAUCHK_20:
+L60FC:  LDA  #$90
+L60FE:  CMP  TEMP3
+L6100:  BCC  SAUCHK_10
+L6102:  LDA  #$40                   ;C INDICATE COLLISION
+L6104:  STA  SCOLFG
+L6106:  LDA  #DISINT
+L6108:  JSR  SNDON
+L610B:  LDA  #$A0                   ;C EXPLODE SHELL
+L610D:  STA  FIRECT,X
+L610F:  STA  EXPCNT,X
+L6111:  LDA  #LOX
+L6113:  .byte $19, $15, $00         ;ORA SNDWRD,Y (forced absolute)
+L6116:  .byte $99, $15, $00         ;STA SNDWRD,Y (forced absolute)
+L6119:  TXA                         ;D IF ROBOT BLEW IT UP
+L611A:  BNE  C_60S_
+L611C:  LDA  HITS
+L611E:  STA  TEMP1
+L6120:  LDA  HITS+1
+L6122:  STA  TEMP1+1
+L6124:  LDA  #$05
+L6126:  CLC
+L6127:  SED
+L6128:  ADC  HITS
+L612A:  STA  HITS
+
+SAUCHK_30:
+L612C:  LDA  HITS+1
+L612E:  ADC  #$00
+L6130:  CLD
+L6131:  STA  HITS+1
+L6133:  JSR  NEWLIF                 ;C GEIV NEW LIFE
+
+SAUCHK_40:
+L6136:  JMP  C_60S_
+
+PRXTBL:
+L6139:  .byte $38, $58
+L613B:  .byte $00, $00, $00, $00, $00, $00, $00, $00 ;.REPT 10.
+L6143:  .byte $00, $00
+L6145:  .byte $56, $00, $00, $00
+
+;------------------------------------------------------------------------------
+; ABSTMP - ABSOLUTE VALUE
+;   BLOCK NAME: ABSTMP
+;   DESCRIPTION: WILL RETURN ABSOLUTE VALUE OF TEMP1 IN TEMP1
+;   INPUT PARAMS: TEMP1
+;   OUTPUT PARAMS: TEMP1
+;   REGISTERS: A
+;------------------------------------------------------------------------------
+ABSTMP:
+L6149:  BIT  TEMP1+1                ;D IF POSITIVE
+L614B:  BPL  ABSTMP_10
+L614D:  LDA  TEMP1                  ;C ABS VALUE
+L614F:  CLC
+L6150:  EOR  #$FF
+L6152:  ADC  #$01
+L6154:  STA  TEMP1
+L6156:  LDA  TEMP1+1                ;HIGH BYTE
+L6158:  EOR  #$FF
+L615A:  ADC  #$00
+L615C:  STA  TEMP1+1
+
+ABSTMP_10:
+L615E:  RTS
+
+;------------------------------------------------------------------------------
+; NEWLIF - GIVE NEW LIFE TO PLAYER IF WARRANTED
+;   USES (A) - TEMP1 MUST HAVE SCORE PRIOR TO
+;   CURRENT INCREMENT
+;------------------------------------------------------------------------------
+NEWLIF:
+L615F:  LDA  OPTION                 ;C GET BONUS LEVEL
+L6162:  LSR
+L6163:  LSR
+L6164:  LSR
+L6165:  LSR
+L6166:  AND  #$03
+L6168:  TAX
+L6169:  LDA  BONTBL,X
+L616C:  BEQ  NEWLIF_20
+L616E:  LDX  HITS+1                 ;D IF NOT IN PROPER RANGE
+L6170:  BNE  NEWLIF_40
+L6172:  CMP  TEMP1
+L6174:  BCC  NEWLIF_20
+L6176:  CMP  HITS
+L6178:  BCS  NEWLIF_20
+L617A:  INC  LIVES
+L617C:  LDA  #$00                   ;C MAKE SURE GAME NOT OVER
+L617E:  STA  GOVER
+L6180:  LDA  #BONER                 ;C ING THE BELL
+
+NEWLIF_10:
+L6182:  JSR  SNDON
+
+NEWLIF_20:
+L6185:  LDX  #$00
+L6187:  RTS
+
+NEWLIF_40:
+L6188:  LDA  TEMP1+1                ;D IF NOT SUPER BONUS
+L618A:  BNE  NEWLIF_20
+L618C:  STA  GOVER                  ;C SUPER BONUS
+L618E:  INC  LIVES
+L6190:  LDA  #$FF
+L6192:  STA  SUPER
+L6195:  LDA  #SUPBON
+L6197:  BNE  NEWLIF_10              ;B
+
+;------------------------------------------------------------------------------
+; EXINIT - EXPLOSION INITIALIZATION
+;   BLOCK NAME: EXINIT
+;   DESCRIPTION: INITIALIZES POSITIONS AND Z VELOCITIES OF TANK PIECES IF
+;   ROBOT EXPLODED
+;   INPUT PARAMS: (X)=2 MEANS PLAYER EXPLODED
+;   (X)=0 MEANS ROBOT EXPLODED
+;   OUTPUT PARAMS: EXPOSX,EXPOSY,ZVELOC,EXPOSO,EXPOSZ
+;   REGISTERS: A,Y
+;   SUBROUTINES: RAND
+;------------------------------------------------------------------------------
+EXINIT:
+L6199:  TXA                         ;D IF NOT ROBOT EXPLODED
+L619A:  BNE  EXINIT_20
+
+EXINIT_1:
+L619C:  LDX  #$05
+L619E:  LDY  #$0A
+
+EXINIT_10:
+L61A0:  LDA  IZVEL,X                ;C INITIALIZE Z VELOCITIES
+L61A3:  STA  ZVELOC,Y
+L61A6:  LDA  TPOSX+2                ;C INIT ALL PIECES POS
+L61A8:  STA  EXPOSX,Y
+L61AB:  LDA  TPOSX+3
+L61AD:  STA  EXPOSX+1,Y
+L61B0:  LDA  TPOSY+2
+L61B2:  STA  EXPOSY,Y
+L61B5:  LDA  TPOSY+3
+L61B7:  STA  EXPOSY+1,Y
+L61BA:  LDA  PRAND                  ;C INITIALIZE ORIENTATION
+L61BD:  STA  EXPOSO,Y
+L61C0:  LDA  #$00
+L61C2:  STA  EXPOSZ,Y
+L61C5:  STA  EXPOSZ+1,Y
+L61C8:  DEY
+L61C9:  DEY
+L61CA:  DEX
+L61CB:  BPL  EXINIT_10
+L61CD:  LDX  #$00                   ;L RESTORE X
+
+EXINIT_20:
+L61CF:  RTS
+
+;------------------------------------------------------------------------------
+; MOTION - MOTION OF TANK
+;------------------------------------------------------------------------------
+MOTION:
+L61D0:  BIT  ATRACT                 ;D IF IN GAME
+L61D2:  BMI  MOTION_10
+L61D4:  BIT  LOGO                   ;D IF LOGO
+L61D7:  BMI  MOTION_20
+L61D9:  LDA  CRACK
+L61DB:  BNE  MOTION_20
+L61DD:  LDX  #$00                   ;C MOVE IN ATTRACT
+L61DF:  BIT  FRAME
+L61E1:  BVS  MOTION_3
+L61E3:  JSR  M_FOR
+L61E6:  JMP  MOTION_4
+
+MOTION_3:
+L61E9:  JSR  M_REV
+
+MOTION_4:
+L61EC:  BIT  TPOSX+3
+L61EE:  BPL  MOTION_6
+L61F0:  BVC  MOTION_20
+L61F2:  JMP  ITANGL
+
+MOTION_6:
+L61F5:  JMP  DTANGL
+
+MOTION_10:
+L61F8:  LDX  #$00
+L61FA:  LDA  COLFLG,X
+L61FC:  BEQ  M_TOP
+
+MOTION_20:
+L61FE:  RTS
+
+;------------------------------------------------------------------------------
+; M_TOP - [note] MOTION's control dispatcher: reads the tread/fire switches from ALLPOT (inverted so 1=pressed),
+;   and pushes/RTS-jumps through MTAB to the M_xx handler for that combination.  Codes 0-4 route to
+;   M_STOP (CMP #$05/BCC) - Atari's own inline comment here reads "< 4 IS ILLEGAL", one off from
+;   the actual test.
+;------------------------------------------------------------------------------
+M_TOP:
+L61FF:  JSR  SAVEIT
+L6202:  STX  POTGO                  ;C READ POKEY
+L6205:  LDA  ALLPOT
+L6208:  STA  PL1MOV
+L620B:  EOR  #$0F
+L620D:  AND  #$0F
+L620F:  CMP  #$05                   ;< 4 IS ILLEGAL
+L6211:  BCC  M_STOP
+L6213:  ASL
+L6214:  TAY
+L6215:  LDA  MTAB-9,Y
+L6218:  PHA
+L6219:  LDA  MTAB-$A,Y
+L621C:  PHA
+L621D:  RTS
+
+MTAB:
+L621E:  .word M_FF-1, M_PR-1, M_RTF-1, M_STOP-1
+L6226:  .word M_PL-1, M_FR-1
+L622A:  .word M_LTR-1, M_STOP-1, M_LTF-1, M_RTR-1
+L6232:  .word M_STOP-1
+
+;------------------------------------------------------------------------------
+; M_PR - [note] MTAB entry: pivot right in place - two DTANGL calls (double turn rate), then JMPs to M_6S_ to
+;   clear the OBJCOL collision-retry flag.
+;------------------------------------------------------------------------------
+M_PR:
+L6234:  JSR  DTANGL                 ;C PIVOT RIGHT
+L6237:  JSR  DTANGL
+L623A:  JMP  M_6S_                  ;B
+
+;------------------------------------------------------------------------------
+; M_PL - [note] MTAB entry: pivot left in place - two ITANGL calls, then JMPs to M_6S_.
+;------------------------------------------------------------------------------
+M_PL:
+L623D:  JSR  ITANGL                 ;C PIVOT LEFT
+L6240:  JSR  ITANGL
+L6243:  JMP  M_6S_                  ;B
+
+;------------------------------------------------------------------------------
+; M_LTF - [note] MTAB entry: turn left while moving forward - one ITANGL, then JMPs to M_F (single-speed
+;   forward; compare M_FF, which falls into M_F after an extra M_FOR).
+;------------------------------------------------------------------------------
+M_LTF:
+L6246:  JSR  ITANGL                 ;C LEFT TURN FORWARD
+L6249:  JMP  M_F                    ;B
+
+;------------------------------------------------------------------------------
+; M_LTR - [note] MTAB entry: turn left while reversing - one ITANGL, then JMPs to M_R (single-speed reverse).
+;------------------------------------------------------------------------------
+M_LTR:
+L624C:  JSR  ITANGL                 ;C LEFT TURN REVERSE
+L624F:  JMP  M_R                    ;B
+
+;------------------------------------------------------------------------------
+; M_RTF - [note] MTAB entry: turn right while moving forward - one DTANGL, then JMPs to M_F.
+;------------------------------------------------------------------------------
+M_RTF:
+L6252:  JSR  DTANGL                 ;C RIGHT TURN FOWARD
+L6255:  JMP  M_F                    ;B
+
+;------------------------------------------------------------------------------
+; M_RTR - [note] MTAB entry: turn right while reversing - one DTANGL, then JMPs to M_R.
+;------------------------------------------------------------------------------
+M_RTR:
+L6258:  JSR  DTANGL                 ;C RIGHT TURN REVERSE
+L625B:  JMP  M_R
+
+;------------------------------------------------------------------------------
+; M_FF - [note] MTAB entry: full forward - an extra JSR M_FOR here before falling into M_F (which calls M_FOR
+;   again), for double-distance movement; M_LTF/M_RTF instead enter at M_F directly.
+;------------------------------------------------------------------------------
+M_FF:
+L625E:  JSR  M_FOR                  ;C FULL FOWARD
+
+M_F:
+L6261:  JSR  M_FOR                  ;C FORWARD
+L6264:  INC  TRDCTR,X
+L6266:  JMP  M_NEXT                 ;B
+
+;------------------------------------------------------------------------------
+; M_FR - [note] MTAB entry: full reverse - an extra JSR M_REV here before falling into M_R, for double-distance
+;   reverse; M_LTR/M_RTR instead enter at M_R directly.
+;------------------------------------------------------------------------------
+M_FR:
+L6269:  JSR  M_REV                  ;C FULL REVERSE
+
+M_R:
+L626C:  JSR  M_REV                  ;C REVERSE
+L626F:  DEC  TRDCTR,X
+
+M_NEXT:
+L6271:  JSR  OBJOBJ                 ;D IF NO COLLISION
+L6274:  BCC  M_6S_
+L6276:  JSR  BAKOUT
+L6279:  LDA  OBJCOL                 ;D IF ALREADY IN COLLISION
+L627B:  BNE  M_10S_
+L627D:  LDA  #BOING                 ;C SOUND OF RUNNING INTO OBJECT
+L627F:  JSR  SNDON
+L6282:  LDA  #$3F
+L6284:  STA  BOUNCE
+L6286:  INC  OBJCOL
+L6288:  BNE  M_10S_
+
+M_6S_:
+L628A:  LDA  #$00
+L628C:  STA  OBJCOL
+
+M_10S_:
+L628E:  LDA  #HIDLE
+L6290:  BNE  M_NEX0
+
+;------------------------------------------------------------------------------
+; M_STOP - [note] MTAB entry (also M_TOP's illegal-code fallback): selects the idle engine sound (LIDLE) instead
+;   of moving, then falls into the shared engine-sound/fire-button code below M_TOP's dispatch.
+;------------------------------------------------------------------------------
+M_STOP:
+L6292:  LDA  #LIDLE
+
+M_NEX0:
+L6294:  STA  TEMP1                  ;C SET ENGINE SPEED SOUND
+L6296:  .byte $BD, $15, $00         ;LDA SNDWRD,X (forced absolute)
+L6299:  AND  #$EF
+L629B:  ORA  TEMP1
+L629D:  STA  SNDWRD,X
+
+M_NEX0_5:
+L629F:  LDA  FIRECT,X               ;D IF SHELL HAS BEEN FIRED
+L62A1:  BNE  M_NEX0_50
+
+M_NEX0_10:
+L62A3:  LDA  PL1MOV                 ;D IF FIRE BUTTON HAS NOT BEEN PUSHED
+L62A6:  AND  #PL1FIR
+L62A8:  BEQ  M_NEX0_50
+L62AA:  LDA  #$7F                   ;C INDICATE SHELL FIRED
+L62AC:  STA  FIRECT,X
+L62AE:  LDA  SNDWRD,X               ;C SET TO HI EXPLODE SOUND
+L62B0:  ORA  #LOUDSH
+L62B2:  STA  SNDWRD,X
+L62B4:  LDA  #$05                   ;C TURN ON EXPLOSION
+L62B6:  STA  SXPCNT
+L62B8:  LDA  LANGLE,X
+L62BA:  CLC
+L62BB:  ROL
+L62BC:  ROL
+L62BD:  PHA
+L62BE:  LDA  TANGLE,X
+L62C0:  STX  SAVE1
+L62C2:  TAX
+L62C3:  PLA
+L62C4:  JSR  COSXTR
+L62C7:  STA  TEMP1
+L62C9:  TXA
+L62CA:  PHP
+L62CB:  LDX  SAVE1
+L62CD:  STA  SINCX,X
+L62CF:  PLP
+L62D0:  BMI  M_NEX0_15
+L62D2:  LDA  #$00
+L62D4:  BEQ  M_NEX0_16
+
+M_NEX0_15:
+L62D6:  LDA  #$FF
+
+M_NEX0_16:
+L62D8:  ASL  TEMP1
+L62DA:  ROL  SINCX,X
+L62DC:  ROL
+L62DD:  STA  SINCX+1,X
+L62DF:  LDA  TANGLE,X
+L62E1:  TAX
+L62E2:  LDA  GARBAG
+L62E4:  JSR  SINXTR
+L62E7:  STA  TEMP1
+L62E9:  TXA
+L62EA:  PHP
+L62EB:  LDX  SAVE1
+L62ED:  STA  SINCY,X
+L62EF:  PLP
+L62F0:  BMI  M_NEX0_20
+L62F2:  LDA  #$00
+L62F4:  BEQ  M_NEX0_21
+
+M_NEX0_20:
+L62F6:  LDA  #$FF
+
+M_NEX0_21:
+L62F8:  ASL  TEMP1
+L62FA:  ROL  SINCY,X
+L62FC:  ROL
+L62FD:  STA  SINCY+1,X
+L62FF:  LDA  TPOSX,X                ;C INIT SHELL POSITION (LOAD SHELL)
+L6301:  STA  SHELLX,X
+L6303:  LDA  TPOSX+1,X
+L6305:  STA  SHELLX+1,X
+L6307:  LDA  TPOSY,X
+L6309:  STA  SHELLY,X
+L630B:  LDA  TPOSY+1,X
+L630D:  STA  SHELLY+1,X
+
+M_NEX0_50:
+L630F:  RTS
+
+;------------------------------------------------------------------------------
+; M_SET - [note] Compute the per-tick motion vector for the tank/robot at index X from its TANGLE angle:
+;   Y1=SIN(angle)/2, X1=COS(angle)/2 (rounded via the CMP #$80/ROR trick, sign-extended into
+;   Y1+1/X1+1); used by M_FOR/M_REV to advance TPOSX/TPOSY.
+;------------------------------------------------------------------------------
+M_SET:
+L6310:  LDA  TANGLE,X               ;C GET ANGLE
+L6312:  STX  TEMP1                  ;SAVE X
+L6314:  JSR  SIN                    ;C SIN (ANGLE)/2
+L6317:  TXA
+L6318:  CMP  #$80
+L631A:  ROR
+L631B:  STA  Y1
+L631D:  CMP  #$80
+L631F:  ROR
+L6320:  CLC
+L6321:  ADC  Y1
+L6323:  STA  Y1
+L6325:  BPL  M_SET_10               ;SIGN EXTEND
+L6327:  LDA  #$FF
+L6329:  BMI  M_SET_11
+
+M_SET_10:
+L632B:  LDA  #$00
+
+M_SET_11:
+L632D:  STA  Y1+1
+L632F:  LDX  TEMP1
+L6331:  LDA  TANGLE,X               ;C GET ANGLE
+L6333:  JSR  COS                    ;C COS (ANGLE)/2
+L6336:  TXA
+L6337:  CMP  #$80
+L6339:  ROR
+L633A:  STA  X1
+L633C:  CMP  #$80
+L633E:  ROR
+L633F:  CLC
+L6340:  ADC  X1
+L6342:  STA  X1
+L6344:  BPL  M_SET_20
+L6346:  LDA  #$FF
+L6348:  BMI  M_SET_21
+
+M_SET_20:
+L634A:  LDA  #$00
+
+M_SET_21:
+L634C:  STA  X1+1
+L634E:  LDX  TEMP1                  ;L RESTORE INDEX
+L6350:  RTS
+
+;------------------------------------------------------------------------------
+; M_FOR - C FULL FOWARD  (comment at the call)
+;   C FORWARD  (another call)
+;------------------------------------------------------------------------------
+M_FOR:
+L6351:  JSR  M_SET
+
+;------------------------------------------------------------------------------
+; M_FOR1 - C MOVE FORWARD  (comment at the call)
+;------------------------------------------------------------------------------
+M_FOR1:
+L6354:  LDA  TPOSX,X                ;C UPDATE X POSITION
+L6356:  CLC
+L6357:  ADC  X1
+L6359:  STA  TPOSX,X
+L635B:  LDA  TPOSX+1,X
+L635D:  ADC  X1+1
+L635F:  STA  TPOSX+1,X
+L6361:  LDA  TPOSY,X                ;C UPDATE Y POS
+L6363:  CLC
+L6364:  ADC  Y1
+L6366:  STA  TPOSY,X
+L6368:  LDA  TPOSY+1,X
+L636A:  ADC  Y1+1
+L636C:  STA  TPOSY+1,X
+L636E:  RTS
+
+;------------------------------------------------------------------------------
+; M_REV - C FULL REVERSE  (comment at the call)
+;   C REVERSE  (another call)
+;------------------------------------------------------------------------------
+M_REV:
+L636F:  JSR  M_SET
+L6372:  LDA  TPOSX,X                ;C UPDATE X POS
+L6374:  SEC
+L6375:  SBC  X1
+L6377:  STA  TPOSX,X
+L6379:  LDA  TPOSX+1,X
+L637B:  SBC  X1+1
+L637D:  STA  TPOSX+1,X
+L637F:  SEC                         ;C UPDATE Y POS
+L6380:  LDA  TPOSY,X
+L6382:  SBC  Y1
+L6384:  STA  TPOSY,X
+L6386:  LDA  TPOSY+1,X
+L6388:  SBC  Y1+1
+L638A:  STA  TPOSY+1,X
+L638C:  RTS
+
+;------------------------------------------------------------------------------
+; ITANGL - C PIVOT LEFT  (comment at the calls)
+;   C LEFT TURN FORWARD  (another call)
+;   C LEFT TURN REVERSE  (another call)
+;------------------------------------------------------------------------------
+ITANGL:
+L638D:  LDA  #$80                   ;C INCREMENT TANK'S ANGLE
+L638F:  CLC
+L6390:  ADC  LANGLE,X
+L6392:  STA  LANGLE,X
+L6394:  LDA  #$00
+L6396:  ADC  TANGLE,X
+L6398:  STA  TANGLE,X
+L639A:  RTS
+
+;------------------------------------------------------------------------------
+; DTANGL - C PIVOT RIGHT  (comment at the calls)
+;   C RIGHT TURN FOWARD  (another call)
+;   C RIGHT TURN REVERSE  (another call)
+;------------------------------------------------------------------------------
+DTANGL:
+L639B:  LDA  LANGLE,X               ;C DECREMENT TANK'S ANGLE
+L639D:  SEC
+L639E:  SBC  #$80
+L63A0:  STA  LANGLE,X
+L63A2:  LDA  TANGLE,X
+L63A4:  SBC  #$00
+L63A6:  STA  TANGLE,X
+L63A8:  RTS
+
+;------------------------------------------------------------------------------
+; SAVEIT - SAVEIT
+;   SAVES POSITION OF TANK OR ROBORT
+;   ON ENTRY X=0 MEANS TANK
+;   X=2 MEANS ROBOT
+;   BLITZES A
+;------------------------------------------------------------------------------
+SAVEIT:
+L63A9:  LDA  TPOSX,X                ;C SAVE OLD TANK POSITION
+L63AB:  STA  OTPOSX
+L63AD:  LDA  TPOSX+1,X
+L63AF:  STA  OTPOSX+1
+L63B1:  LDA  TPOSY,X
+L63B3:  STA  OTPOSY
+L63B5:  LDA  TPOSY+1,X
+L63B7:  STA  OTPOSY+1
+L63B9:  RTS
+
+;------------------------------------------------------------------------------
+; BAKOUT - BACKOUT
+;   UNDOES SAVEIT WITH SAME CONDITIONS
+;   BLITZES A
+;------------------------------------------------------------------------------
+BAKOUT:
+L63BA:  LDA  OTPOSX                 ;C DEAD STOP
+L63BC:  STA  TPOSX,X
+L63BE:  LDA  OTPOSX+1
+L63C0:  STA  TPOSX+1,X
+L63C2:  LDA  OTPOSY
+L63C4:  STA  TPOSY,X
+L63C6:  LDA  OTPOSY+1
+L63C8:  STA  TPOSY+1,X
+L63CA:  RTS
+
+;------------------------------------------------------------------------------
+; REACT - REACT
+;   BLOCK NAME: REACT
+;   DESCRIPTION: SETS UP REACTION TIME FOR ROBOT
+;   INPUT PARAMS: HITS
+;   OUTPUT PARAMS: ACTION,SKILL
+;   REGISTERS: NONE
+;------------------------------------------------------------------------------
+REACT:
+L63CB:  PHA                         ;L SAVE REGISTERS
+L63CC:  BIT  ATRACT
+L63CE:  BMI  REACT_10
+L63D0:  LDA  #$30
+L63D2:  STA  ACTION
+L63D4:  BNE  REACT_35
+L63D6:  LDA  HITS+1
+L63D8:  BEQ  REACT_5
+L63DA:  LDA  #$7F
+L63DC:  STA  SKILL
+L63DE:  BNE  REACT_20
+
+REACT_5:
+L63E0:  LDA  HITS                   ;C WEIGHT REACTION TIME
+L63E2:  SEC
+L63E3:  SBC  HITS+2
+L63E5:  STA  SKILL
+L63E7:  BCS  REACT_10
+L63E9:  EOR  #$FF
+L63EB:  ADC  #$01
+
+REACT_10:
+L63ED:  CMP  #$05
+L63EF:  BCS  REACT_20
+L63F1:  STA  ACTION
+L63F3:  LDA  #$05
+L63F5:  SBC  ACTION
+L63F7:  ASL
+L63F8:  ASL
+L63F9:  ASL
+L63FA:  ASL
+L63FB:  BNE  REACT_30
+
+REACT_20:
+L63FD:  LDA  #$04
+
+REACT_30:
+L63FF:  STA  ACTION
+L6401:  BIT  SKILL                  ;C SET UP ACCURACY FOR ROBOT
+L6403:  BMI  REACT_35
+L6405:  LDA  #$0A
+L6407:  SEC
+L6408:  SBC  SKILL
+L640A:  BCS  REACT_40
+L640C:  LDA  #$01
+L640E:  BNE  REACT_40
+
+REACT_35:
+L6410:  LDA  #$0A
+
+REACT_40:
+L6412:  ASL
+L6413:  STA  SKILL
+L6415:  PLA
+L6416:  RTS
+
+CHKS4:
+L6417:  .byte $D5
+
+;------------------------------------------------------------------------------
+; ROBOT - ROBOT
+;   BLOCK NAME: ROBOT
+;   DESCRIPTION: CONTROL MOTION & FIRING OF ROBOT TANK
+;   INPUT PARAMS: ROBOT POSITON & ANGLE, ACTION
+;   OUTPUT PARAMS: ROBOT'S POSITION & ANGLE, & FIRE
+;   SUBROUTINES: M.DTANGL,M.ITANGE,M.FOR,M.REV,M.SET,TRACK
+;   DSTNCE,ABSTMP,RAND
+;------------------------------------------------------------------------------
+ROBOT:
+L6418:  LDA  COLFLG+2               ;D IF NOT BLOWN UP
+L641A:  BEQ  ROBOT_1
+L641C:  RTS
+
+ROBOT_1:
+L641D:  BIT  R2D3FL
+L641F:  BPL  ROBOT_2
+L6421:  JMP  BUZBOM
+
+ROBOT_2:
+L6424:  LDX  #$02
+L6426:  JSR  SAVEIT                 ;C SAVE POS
+L6429:  CLC                         ;C UPDATE RADAR ANGLE
+L642A:  LDA  RANGLE
+L642C:  ADC  #$0B
+L642E:  STA  RANGLE
+L6430:  LDA  STATE                  ;D IF NOT COLLISION RETREAT
+L6432:  LSR
+L6433:  BCC  ROBOT_10
+L6435:  LSR                         ;C BACK AWAY
+L6436:  PHP
+L6437:  JSR  M_REV
+L643A:  PLP
+L643B:  BCC  ROBOT_7
+L643D:  JSR  ITANGL
+L6440:  JMP  ROBOT_8
+
+ROBOT_7:
+L6443:  JSR  DTANGL
+
+ROBOT_8:
+L6446:  DEC  TRDCTR+2
+
+ROBOT_3:
+L6448:  LDA  ACTION                 ;D IF DONE BACKING
+L644A:  BEQ  ROBOT_5
+L644C:  RTS
+
+ROBOT_5:
+L644D:  LDA  STATE                  ;C RESET COLLISION RETREAT
+L644F:  AND  #$FC
+L6451:  STA  STATE
+L6453:  LDA  TANGLE+2               ;C SET UP NEW GOAL
+L6455:  STA  RGOAL
+L6457:  LDA  #$34
+L6459:  STA  ACTION
+L645B:  RTS
+
+ROBOT_10:
+L645C:  LDA  ACTION                 ;D IF DECISION TIME
+L645E:  BNE  ROBOT_11
+L6460:  JMP  R_40S_
+
+ROBOT_11:
+L6463:  LDA  TANGLE+2               ;D IF ABS THETA < 30 DEG
+L6465:  SEC
+L6466:  SBC  RGOAL
+L6468:  TAY                         ;SAVE
+L6469:  BPL  ROBOT_12
+L646B:  EOR  #$FF
+L646D:  CLC
+L646E:  ADC  #$01
+
+ROBOT_12:
+L6470:  CMP  SKILL
+L6472:  BCC  ROBOT_20
+L6474:  TYA                         ;D IF PIVOT RIGHT
+L6475:  BPL  ROBOT_15
+L6477:  JSR  ITANGL                 ;C PIVOT LEFT
+L647A:  JSR  FIREIT
+L647D:  JSR  ITANGL
+L6480:  JSR  FIREIT
+L6483:  JSR  TR7CHK
+L6486:  BCS  ROBOT_14
+
+ROBOT_13:
+L6488:  RTS
+
+ROBOT_14:
+L6489:  JSR  ITANGL
+L648C:  JSR  FIREIT
+L648F:  JSR  ITANGL
+L6492:  JMP  FIREIT
+
+ROBOT_15:
+L6495:  JSR  DTANGL                 ;C PIVOT RIGHT
+L6498:  JSR  FIREIT
+L649B:  JSR  DTANGL
+L649E:  JSR  FIREIT
+L64A1:  JSR  TR7CHK
+L64A4:  BCC  ROBOT_13
+L64A6:  JSR  DTANGL
+L64A9:  JSR  FIREIT
+L64AC:  JSR  DTANGL
+L64AF:  JMP  FIREIT
+
+ROBOT_20:
+L64B2:  CMP  #$00                   ;D IF ON TARGET
+L64B4:  BEQ  ROBOT_30
+L64B6:  TYA
+L64B7:  BPL  ROBOT_25               ;D IF TURN RIGHT
+L64B9:  JSR  ITANGL                 ;C TURN LEFT
+L64BC:  JMP  ROBOT_30               ;B
+
+ROBOT_25:
+L64BF:  JSR  DTANGL                 ;C TURN RIGHT
+
+ROBOT_30:
+L64C2:  JSR  FIREIT
+L64C5:  LDA  TEMP1                  ;C CHECK DISTANCE
+L64C7:  STA  TPOSXT
+L64CA:  LDA  TEMP1+1
+L64CC:  STA  TPOSXT+1
+L64CF:  LDA  TEMP2
+L64D1:  STA  TPOSYT
+L64D4:  LDA  TEMP2+1
+L64D6:  STA  TPOSYT+1
+L64D9:  STA  DST2
+L64DC:  JSR  TR7CHK
+L64DF:  LDA  MOUTHI
+L64E2:  BCC  ROBOT_32               ;D IF NOT TR7
+L64E4:  CMP  #$08
+L64E6:  BCS  R_37S_
+L64E8:  RTS
+
+ROBOT_32:
+L64E9:  CMP  #$05                   ;D IF NOT TOO CLOSE
+L64EB:  BCS  R_37S_
+L64ED:  RTS
+
+;------------------------------------------------------------------------------
+; R_37S_ - [note] ROBOT: move forward (X=2) - M_SET the per-tick vector, doubled (ASL/ROL) if TR7CHK says this
+;   is the faster TR7-class robot, then M_FOR1/OBJOBJ to advance.  (Turning toward RGOAL already
+;   happened in ROBOT_11-30 before this is reached.)  If already aimed at RGOAL (TANGLE+2=RGOAL)
+;   makes one extra M_FOR1/OBJOBJ move.  Any collision (OBJOBJ carry set) JMPs to BAKOUT to undo
+;   the move.  Before that ($651A): in attract mode (ATRACT bit 7 clear) it always ORs OBJOBJ's A
+;   into STATE and sets ACTION=$30; during play it skips both when A is negative (collided with
+;   the player), otherwise ORs (PRAND AND 2) OR 1 into STATE and sets ACTION=$30.
+;------------------------------------------------------------------------------
+R_37S_:
+L64EE:  LDX  #$02                   ;C MOVE FORWARD
+L64F0:  JSR  M_SET
+L64F3:  JSR  TR7CHK
+L64F6:  BCC  R_37S__20
+L64F8:  ASL  Y1
+L64FA:  ROL  Y1+1
+L64FC:  ASL  X1
+L64FE:  ROL  X1+1
+
+R_37S__20:
+L6500:  JSR  M_FOR1
+L6503:  JSR  OBJOBJ
+L6506:  BCS  R_37S__39              ;D IF COLLISION
+L6508:  INC  TRDCTR+2               ;C MOVE TREAD
+
+R_37S__40:
+L650A:  LDA  TANGLE+2
+L650C:  CMP  RGOAL
+L650E:  BEQ  R_37S__38
+L6510:  RTS
+
+R_37S__38:
+L6511:  JSR  M_FOR1
+L6514:  JSR  OBJOBJ
+L6517:  BCS  R_37S__39
+L6519:  RTS
+
+R_37S__39:
+L651A:  BIT  ATRACT
+L651C:  BPL  R_37S__42
+L651E:  ORA  #$00                   ;D IF COLLIDED WITH PLAYER
+L6520:  BMI  R_37S__41
+L6522:  LDA  PRAND                  ;C INDICATE COLLISION
+L6525:  AND  #$02
+L6527:  ORA  #$01
+
+R_37S__42:
+L6529:  ORA  STATE
+L652B:  STA  STATE
+L652D:  LDA  #$30                   ;C SET UP REACTION TIME
+L652F:  STA  ACTION
+
+R_37S__41:
+L6531:  JMP  BAKOUT                 ;C UNDO DAMAGE
+
+;------------------------------------------------------------------------------
+; R_40S_ - [note] ROBOT's decision-time entry (ACTION=0): in attract mode goes straight to R_RAND (aimless
+;   wandering); in-game escalates to R_ATCK (attack) once FTIMER pegs at $FF, on a random chance,
+;   or if HITS+1 (hundreds digit) is nonzero; otherwise compares HITS to HITS+2 - equal goes to
+;   R_EVAD, HITS<HITS+2 (player behind) goes to R_RAND, HITS>=HITS+2 (player ahead) goes to R_ATCK.
+;------------------------------------------------------------------------------
+R_40S_:
+L6534:  BIT  ATRACT
+L6536:  BPL  R_RAND
+
+R_50S_:
+L6538:  LDA  FTIMER                 ;D IF WE'VE BEEN NICE TOO LONG
+L653A:  CMP  #$FF
+L653C:  BEQ  R_ATCK
+L653E:  LDA  PRAND                  ;D IF RANDOM ATTACK
+L6541:  LSR
+L6542:  BCC  R_ATCK
+L6544:  LDA  HITS+1                 ;D IF HE'S GOOD
+L6546:  BNE  R_ATCK
+L6548:  LDA  HITS                   ;D IF EVADE
+L654A:  SEC
+L654B:  SBC  HITS+2
+L654D:  BEQ  R_EVAD
+L654F:  BCC  R_RAND
+L6551:  BCS  R_ATCK
+
+R_EVAD:
+L6553:  LDA  S_INTCT
+L6555:  AND  #$07
+L6557:  BNE  R_EVAD_10
+L6559:  LDA  #$01
+L655B:  ORA  STATE
+L655D:  STA  STATE
+L655F:  BNE  R_EVAD_20
+
+R_EVAD_10:
+L6561:  LDA  #$00
+L6563:  STA  STATE
+L6565:  JSR  TRACK                  ;C BEAT FEET
+L6568:  EOR  #$40
+L656A:  STA  RGOAL
+
+R_EVAD_20:
+L656C:  LDA  #$40
+L656E:  STA  ACTION
+L6570:  RTS
+
+;------------------------------------------------------------------------------
+; R_RAND - [note] ROBOT: pick a new random heading offset from PRAND&$1F (0-31): if S_INTCT's sign bit is set,
+;   RGOAL = old RGOAL + the random value; otherwise RGOAL = the random value - old RGOAL.  Clears
+;   STATE (not attacking) and JMPs to REACT to apply it.
+;------------------------------------------------------------------------------
+R_RAND:
+L6571:  LDA  PRAND                  ;C RANDOM
+L6574:  AND  #$1F
+L6576:  BIT  S_INTCT
+L6578:  BMI  R_RAND_10
+L657A:  SBC  RGOAL
+L657C:  BNE  R_RAND_20
+
+R_RAND_10:
+L657E:  ADC  RGOAL
+
+R_RAND_20:
+L6580:  STA  RGOAL
+L6582:  LDA  #$00
+L6584:  STA  STATE
+L6586:  JMP  REACT
+
+;------------------------------------------------------------------------------
+; R_ATCK - [note] ROBOT: aim RGOAL at the player via TRACK, set STATE=$80 (attacking) and JMP REACT.
+;------------------------------------------------------------------------------
+R_ATCK:
+L6589:  JSR  TRACK                  ;C ATTACK
+L658C:  STA  RGOAL
+L658E:  LDA  #$80                   ;C INDICATE ATTACK
+L6590:  STA  STATE
+L6592:  JMP  REACT
+
+;------------------------------------------------------------------------------
+; FIREIT - FIREIT
+;   EXIT: SHELL FIRED OR NOT
+;   USES A
+;------------------------------------------------------------------------------
+FIREIT:
+L6595:  LDA  FTIMER                 ;D IF TOO SOON AFTER APPEARING
+L6597:  CMP  #$20
+L6599:  BCS  FIREIT_3
+
+FIREIT_2:
+L659B:  RTS
+
+FIREIT_3:
+L659C:  CMP  #$FF
+L659E:  BEQ  FIREIT_5
+L65A0:  LDA  HITS+1                 ;D IF HE'S GOOD
+L65A2:  BNE  FIREIT_5
+L65A4:  LDA  HITS                   ;D IF NOT ROOKIE
+L65A6:  LSR
+L65A7:  BNE  FIREIT_5
+L65A9:  LDA  PTURN                  ;D IF NOT IN VIEW
+L65AB:  CMP  #$20
+L65AD:  BCS  FIREIT_2
+
+FIREIT_1:
+L65AF:  LDA  TDIST                  ;D IF TOO FAR
+L65B2:  CMP  #$24
+L65B4:  BCS  FIREIT_50
+
+FIREIT_5:
+L65B6:  JSR  TRACK                  ;D IF NOT ON TARGET
+L65B9:  LDX  #$02
+L65BB:  SEC
+L65BC:  SBC  TANGLE+2
+L65BE:  BPL  FIREIT_10
+L65C0:  CLC
+L65C1:  EOR  #$FF
+L65C3:  ADC  #$02
+
+FIREIT_10:
+L65C5:  CMP  #$02
+L65C7:  BCS  FIREIT_50
+L65C9:  LDA  FIRECT+2               ;D IF SHELL NOT AVAILABLE
+L65CB:  BNE  FIREIT_50
+L65CD:  LDA  COLFLG                 ;D IF PLAYER IS HIT
+L65CF:  BNE  FIREIT_50
+
+FIREIT_35:
+L65D1:  LDA  #$7F                   ;C FIRE!!
+L65D3:  STA  FIRECT+2
+L65D5:  LDA  #$05                   ;C SHELL SOUND
+L65D7:  STA  SXPCNT
+L65D9:  LDA  SNDWRD
+L65DB:  AND  #SOFTSH
+L65DD:  STA  SNDWRD
+L65DF:  LDA  TANGLE+2               ;C SET UP SHELLS MOTION
+L65E1:  JSR  COS
+L65E4:  STA  TEMP1
+L65E6:  TXA
+L65E7:  STA  SINCX+2
+L65E9:  BMI  FIREIT_31
+L65EB:  LDA  #$00
+L65ED:  BEQ  FIREIT_32
+
+FIREIT_31:
+L65EF:  LDA  #$FF
+
+FIREIT_32:
+L65F1:  ASL  TEMP1
+L65F3:  ROL  SINCX+2
+L65F5:  ROL
+L65F6:  STA  SINCX+3
+L65F8:  LDA  TANGLE+2
+L65FA:  JSR  SIN
+L65FD:  STA  TEMP1
+L65FF:  TXA
+L6600:  STA  SINCY+2
+L6602:  BMI  FIREIT_33
+L6604:  LDA  #$00
+L6606:  BEQ  FIREIT_34
+
+FIREIT_33:
+L6608:  LDA  #$FF
+
+FIREIT_34:
+L660A:  ASL  TEMP1
+L660C:  ROL  SINCY+2
+L660E:  ROL
+L660F:  STA  SINCY+3
+L6611:  LDA  TPOSX+2                ;C INIT SHELL POSITION
+L6613:  STA  SHELLX+2
+L6615:  LDA  TPOSX+3
+L6617:  STA  SHELLX+3
+L6619:  LDA  TPOSY+2
+L661B:  STA  SHELLY+2
+L661D:  LDA  TPOSY+3
+L661F:  STA  SHELLY+3
+L6621:  LDX  #$02                   ;L RESTORE X
+
+FIREIT_50:
+L6623:  RTS
+
+;------------------------------------------------------------------------------
+; BUZBOM - R2D3 BUZZ BOMBER
+;   BLOCK NAME: BUZBOM
+;   DESCRIPTION: THIS ROUTINE CONTROLS MOVEMENT OF R2D3-BUZZ-BOMB. IT IS
+;   CALLED IN LIEU OF ROBOT AND FLIES THE BUZZ BOMB DIRECTLY
+;   AT PLAYER, AT HIGH SPEED, SWOOPING IN ON HIM. IF ANOTHER
+;   OBJECT IS ENCOUNTERED, BUZZ-BOMB LEVITATES AND RESTARTS
+;   SWOOPING.
+;   INPUT PARAMS: TANK POSITION, R2D3 POSITION,R2D3 ANGLE,OBJCOL,TDIST
+;   OUTPUT PARAMS: COLFLG'S,CRACK,R2D3 POS & ANGLE,TRDCTR
+;   REGISTERS: A,X,Y
+;   SUBROUTINES: TRACK,M.FOR,OBJCOL
+;------------------------------------------------------------------------------
+BUZBOM:
+L6624:  INC  TRDCTR+2               ;C ALWAYS CHANGE THRUST PICTURE
+
+BUZBOM_1:
+L6626:  LDA  #TOP&$FF               ;D IF TOP > Z HEIGHT AND OBJCOL
+L6628:  CMP  EXPOSZ+$C
+L662B:  LDA  #TOP/$100
+L662D:  SBC  EXPOSZ+$D
+L6630:  LDA  #$00
+L6632:  ROL
+L6633:  STA  GARBAG
+L6635:  AND  OBJCOL+2
+L6637:  BEQ  BUZBOM_2
+L6639:  JMP  BUZBOM_30
+
+BUZBOM_2:
+L663C:  LDA  TANGLE                 ;C INSURE NO BACK ATTACKS
+L663E:  SEC
+L663F:  SBC  RGOAL
+L6641:  STA  TEMP2
+L6643:  BPL  BUZBOM_3
+L6645:  CLC
+L6646:  EOR  #$FF
+L6648:  ADC  #$01
+
+BUZBOM_3:
+L664A:  CMP  #$40
+L664C:  BCS  BUZBOM_4
+L664E:  LDX  #$02
+L6650:  BIT  TEMP2
+L6652:  BPL  BUZBOM_12
+L6654:  BMI  BUZBOM_6
+
+BUZBOM_4:
+L6656:  JSR  TRACK                  ;C ADJUST DIRECTION
+L6659:  LDX  #$02
+L665B:  STA  TEMP2
+L665D:  LDA  RGOAL
+L665F:  SEC
+L6660:  SBC  TEMP2
+L6662:  BEQ  BUZBOM_20
+L6664:  BPL  BUZBOM_10              ;IF DECREMENT NEEDED
+L6666:  CMP  #$FD
+L6668:  BCC  BUZBOM_5
+
+BUZBOM_6:
+L666A:  INC  RGOAL
+
+BUZBOM_5:
+L666C:  INC  RGOAL
+L666E:  JMP  BUZBOM_20
+
+BUZBOM_10:
+L6671:  CMP  #$03
+L6673:  BCC  BUZBOM_15
+
+BUZBOM_12:
+L6675:  DEC  RGOAL
+
+BUZBOM_15:
+L6677:  DEC  RGOAL
+
+BUZBOM_20:
+L6679:  LDA  NOR2D3                 ;D IF FIRST R2D3
+L667C:  BEQ  BUZBOM_37
+L667E:  LDA  HITS+1
+L6680:  BNE  BUZBOM_33
+L6682:  LDA  OPTION
+L6685:  LSR
+L6686:  LSR
+L6687:  AND  #$03
+L6689:  TAX
+L668A:  LDA  MISLVL,X
+L668D:  CLC
+L668E:  SED
+L668F:  ADC  #$25
+L6691:  CLD
+L6692:  SEC
+L6693:  SBC  HITS
+L6695:  BMI  BUZBOM_33
+L6697:  CMP  #$08
+L6699:  BCS  BUZBOM_35
+
+BUZBOM_33:
+L669B:  LDA  #$08
+
+BUZBOM_35:
+L669D:  CMP  TDIST
+L66A0:  BCC  BUZBOM_40
+
+BUZBOM_37:
+L66A2:  LDA  RGOAL
+L66A4:  JMP  BUZBOM_19
+
+BUZBOM_40:
+L66A7:  LDA  FRAME                  ;C SET UP X1 & Y1 FOR M.FOR1
+L66A9:  LSR
+L66AA:  LSR
+L66AB:  LSR
+L66AC:  LSR
+L66AD:  LDA  FRAME
+L66AF:  AND  #$1F
+L66B1:  STA  TEMP1
+L66B3:  LDA  RGOAL
+L66B5:  BCS  BUZBOM_18
+L66B7:  ADC  TEMP1
+L66B9:  JMP  BUZBOM_19
+
+BUZBOM_18:
+L66BC:  SBC  TEMP1
+
+BUZBOM_19:
+L66BE:  STA  TANGLE+2
+L66C0:  JSR  SIN
+L66C3:  STX  Y1
+L66C5:  PHA
+L66C6:  LDA  #$00
+L66C8:  BIT  Y1
+L66CA:  BPL  BUZBOM_22
+L66CC:  LDA  #$FF
+
+BUZBOM_22:
+L66CE:  STA  Y1+1
+L66D0:  PLA
+L66D1:  ASL
+L66D2:  ROL  Y1
+L66D4:  ROL  Y1+1
+L66D6:  ASL
+L66D7:  ROL  Y1
+L66D9:  ROL  Y1+1
+L66DB:  LDA  TANGLE+2
+L66DD:  JSR  COS
+L66E0:  STX  X1
+L66E2:  PHA
+L66E3:  LDA  #$00
+L66E5:  BIT  X1
+L66E7:  BPL  BUZBOM_24
+L66E9:  LDA  #$FF
+
+BUZBOM_24:
+L66EB:  STA  X1+1
+L66ED:  PLA
+L66EE:  ASL
+L66EF:  ROL  X1
+L66F1:  ROL  X1+1
+L66F3:  ASL
+L66F4:  ROL  X1
+L66F6:  ROL  X1+1
+L66F8:  LDA  TPOSX+2                ;C SAVE OLD POSITION
+L66FA:  STA  OTPOSX
+L66FC:  LDA  TPOSX+3
+L66FE:  STA  OTPOSX+1
+L6700:  LDA  TPOSY+2
+L6702:  STA  OTPOSY
+L6704:  LDA  TPOSY+3
+L6706:  STA  OTPOSY+1
+L6708:  LDX  #$02
+L670A:  JSR  M_FOR1                 ;C MOVE FORWARD
+L670D:  JSR  QWIKCK                 ;D IF WE'RE BLOWN UP
+L6710:  BCS  BUZBOM_26
+L6712:  LDX  #$02
+L6714:  JSR  OBJOBJ                 ;D IF NO COLLISION
+L6717:  BCC  BUZBOM_25
+L6719:  LDX  GARBAG                 ;D IF ON GROUND
+L671B:  BNE  BUZBOM_28
+L671D:  RTS
+
+BUZBOM_25:
+L671E:  LDA  #$00
+L6720:  STA  OBJCOL+2
+L6722:  LDA  EXPOSZ+$C
+L6725:  ORA  EXPOSZ+$D
+L6728:  BEQ  BUZBOM_26
+L672A:  DEC  EXPOSZ+$D
+
+BUZBOM_26:
+L672D:  RTS
+
+BUZBOM_28:
+L672E:  ORA  #$00
+L6730:  BMI  BUZBOM_60              ;D IF WE GOT HIM
+L6732:  LDA  OTPOSX                 ;C BACK OUT POSITION CHANGE
+L6734:  STA  TPOSX+2
+L6736:  LDA  OTPOSX+1
+L6738:  STA  TPOSX+3
+L673A:  LDA  OTPOSY
+L673C:  STA  TPOSY+2
+L673E:  LDA  OTPOSY+1
+L6740:  STA  TPOSY+3
+L6742:  INC  OBJCOL+2               ;C INDICATE COLLISION
+L6744:  RTS
+
+BUZBOM_30:
+L6745:  INC  EXPOSZ+$D
+
+BUZBOM_50:
+L6748:  RTS
+
+BUZBOM_60:
+L6749:  LDA  #$20                   ;C BLOW'M BOTH UP
+L674B:  STA  COLFLG
+L674D:  STA  COLFLG+2
+L674F:  LDA  #$02
+L6751:  STA  CRACK
+L6753:  LDA  #$FF
+L6755:  STA  BOUNCE
+L6757:  LDA  #$01                   ;C ONLY POINTS FOR ENEMY
+L6759:  CLC
+L675A:  SED
+L675B:  ADC  HITS+2
+L675D:  CLD
+L675E:  STA  HITS+2
+L6760:  LDX  #$00
+L6762:  STX  CHAN3V
+L6765:  STX  CHAN4V
+L6768:  JSR  EXINIT
+L676B:  LDA  #$FF
+L676D:  STA  EXPCNT
+L676F:  LDA  SNDWRD
+L6771:  AND  #HIX
+L6773:  STA  SNDWRD
+L6775:  DEC  LIVES
+L6777:  BNE  BUZBOM_70
+L6779:  INC  GOVER
+
+BUZBOM_70:
+L677B:  RTS
+
+;------------------------------------------------------------------------------
+; SAUCMV - SAUCER MOTION
+;   BLOCK NAME: SAUCMV
+;   DESCRIPTION: THIS ROUTINE CONTROL ENTRANCE,
+;   EXIT, & MOTION OF SAUCER
+;   INPUT PARAMS: SCDLFG,STIMER,SAUCER,SCANGL,SAPOSX,SAPOSY
+;   OUTPUT PARAMS: SAPOSX,SAPOSY,SAINCX,SAINCX,SCANGL,SINT,STIMTER
+;   REGISTERS: A
+;------------------------------------------------------------------------------
+SAUCMV:
+L677C:  LDA  SCOLFG                 ;D IF NOT BLOWING UP
+L677E:  BEQ  SAUCMV_20
+L6780:  CMP  #$30                   ;D IF < 30
+L6782:  BCC  SAUCMV_10
+L6784:  LDA  #$60
+L6786:  SEC
+L6787:  SBC  SCOLFG
+
+SAUCMV_10:
+L6789:  CLC
+L678A:  ADC  #$08                   ;C SET INTENSITY FOR EXPLOSION
+L678C:  ASL
+L678D:  ASL
+L678E:  AND  #$F0
+L6790:  STA  SINT
+L6793:  DEC  SCOLFG                 ;D IF EXPLOSION NOT OVER
+L6795:  DEC  SCOLFG
+L6797:  BNE  SAUCMV_15
+L6799:  LDA  PRAND                  ;C RESET TIMER TILL NEXT SAUCER
+L679C:  STA  STIMER
+L679E:  LDA  #$00
+L67A0:  STA  SAUCER
+
+SAUCMV_15:
+L67A2:  RTS
+
+SAUCMV_20:
+L67A3:  LDA  SAUCER                 ;D IF NOT SAUCER
+L67A5:  BEQ  SAUCMV_40
+L67A7:  LDA  SCANGL                 ;C ROTATE SAUCER
+L67A9:  CLC
+L67AA:  ADC  #$08
+L67AC:  STA  SCANGL
+L67AE:  LDA  STIMER                 ;D IF DECSION TIMER
+L67B0:  BEQ  SAUCMV_30
+L67B2:  CLC                         ;C MOVE SAUCER
+L67B3:  LDA  SAINCX
+L67B5:  ADC  SAPOSX
+L67B7:  STA  SAPOSX
+L67B9:  LDA  SAPOSX+1
+L67BB:  ADC  SAINCX+1
+L67BD:  STA  SAPOSX+1
+L67BF:  LDA  SAPOSY
+L67C1:  CLC
+L67C2:  ADC  SAINCY
+L67C4:  STA  SAPOSY
+L67C6:  LDA  SAPOSY+1
+L67C8:  ADC  SAINCY+1
+L67CA:  STA  SAPOSY+1
+
+SAUCMV_28:
+L67CC:  DEC  STIMER
+L67CE:  RTS
+
+SAUCMV_30:
+L67CF:  LDA  PRAND                  ;C SET NEW MOTION VALUES
+L67D2:  STA  SAINCX
+L67D4:  ORA  #$00
+L67D6:  BMI  SAUCMV_31
+L67D8:  LDA  #$00
+L67DA:  BEQ  SAUCMV_32
+
+SAUCMV_31:
+L67DC:  LDA  #$FF
+
+SAUCMV_32:
+L67DE:  STA  SAINCX+1
+L67E0:  LDA  PRAND
+L67E3:  STA  SAINCY
+L67E5:  ORA  #$00
+L67E7:  BMI  SAUCMV_35
+L67E9:  LDA  #$00
+L67EB:  BEQ  SAUCMV_36
+
+SAUCMV_35:
+L67ED:  LDA  #$FF
+
+SAUCMV_36:
+L67EF:  STA  SAINCY+1
+L67F1:  LDA  PRAND                  ;C RESET TIMER
+L67F4:  LSR
+L67F5:  STA  STIMER
+L67F7:  RTS
+
+SAUCMV_40:
+L67F8:  LDA  HITS                   ;D IF SCORE NOT TOO LOW
+L67FA:  LSR
+L67FB:  BNE  SAUCMV_41
+L67FD:  RTS
+
+SAUCMV_41:
+L67FE:  LDA  STIMER                 ;D IF NOT TIME YET
+L6800:  BNE  SAUCMV_28
+L6802:  LDA  PRAND                  ;C BRING OUT SAUCER
+L6805:  STA  SAPOSX+1
+L6807:  LDA  PRAND
+L680A:  STA  SAPOSY+1
+L680C:  INC  SAUCER
+L680E:  BNE  SAUCMV_30              ;B SET UP MOITION
+
+;------------------------------------------------------------------------------
+; TRACK - TRACKING ROUTINE
+;   BLOCK NAME: TRACK
+;   DESCRIPTION: THIS ROUTINE COMPUTE THE VECTOR
+;   BETWEEN THE ROBOT TANK AND THE PLAYER
+;   CONTROLLED TANK, AND USING THE ARCTANGENT
+;   FUNCTION, RETURNS THE ANGLE TO DIRECT THE
+;   ROBOT TANK IN.
+;   INPUT PARAMS: TPOSX,TPOSY FOR BOTH TANKS
+;   OUTPUT PARAMS: (A)=NEW ANGLE TO DIRECT ROBOT
+;   TEMP1 =ABS VALUE(Y)
+;   TEMP2 =ABS VALUE(X)
+;   REGISTERS: A,X,Y
+;   SUBROUTINES: NONE
+;------------------------------------------------------------------------------
+TRACK:
+L6810:  LDY  #$00                   ;C INITIALIZE QUADRANT
+L6812:  SEC                         ;C HIS XPOS MINUS ROBOT XPOS
+L6813:  LDA  TPOSX
+L6815:  SBC  TPOSX+2
+L6817:  STA  TEMP1
+L6819:  LDA  TPOSX+1
+L681B:  SBC  TPOSX+3
+L681D:  STA  TEMP1+1
+L681F:  BPL  TRACK_10               ;D IF POSITIVE
+L6821:  JSR  ABSTMP                 ;C TAKE ABSOLUTE VALUE
+L6824:  INY                         ;C X < 0 MEANS QUAD 2 OR 3
+
+TRACK_10:
+L6825:  LDA  TEMP1                  ;C MOVE ABSOLUTE VALUE
+L6827:  STA  TEMP2
+L6829:  LDA  TEMP1+1
+L682B:  STA  TEMP2+1
+L682D:  LDA  TEMP1+1
+L682F:  SEC                         ;C HIS YPOS MINUS ROBOT YPOS
+L6830:  LDA  TPOSY
+L6832:  SBC  TPOSY+2
+L6834:  STA  TEMP1
+L6836:  LDA  TPOSY+1
+L6838:  SBC  TPOSY+3
+L683A:  STA  TEMP1+1
+L683C:  BPL  TRACK_20               ;D IF POSITIVE
+L683E:  JSR  ABSTMP                 ;C ABSOLUTE VALUE
+L6841:  TYA                         ;C Y < 0 MEANS QUAD 2 OR 3
+L6842:  BEQ  TRACK_12
+L6844:  INY
+L6845:  BNE  TRACK_20
+
+TRACK_12:
+L6847:  LDY  #$03
+
+TRACK_20:
+L6849:  LDA  TEMP1                  ;D IF X > Y
+L684B:  CMP  TEMP2
+L684D:  BNE  TRACK_25               ;(IF NOT EQUAL)
+L684F:  LDA  TEMP1+1
+L6851:  CMP  TEMP2+1
+L6853:  BEQ  TRACK_22               ;D IF X=Y
+L6855:  SEC
+L6856:  BCS  TRACK_25
+
+TRACK_22:
+L6858:  LDA  #$20                   ;C USE 45 DEG
+L685A:  BNE  TRACK_45
+
+TRACK_25:
+L685C:  LDA  TEMP1+1
+L685E:  SBC  TEMP2+1
+L6860:  PHP                         ;(SAVE STATUS)
+L6861:  BCC  TRACK_30
+
+TRACK_28:
+L6863:  LDA  TEMP1                  ;C COMPUTE X/Y
+L6865:  STA  XPL
+L6868:  LDA  TEMP1+1
+L686A:  STA  XPH
+L686D:  LDA  TEMP2
+L686F:  STA  DIVOUT
+L6872:  LDA  TEMP2+1
+L6874:  STA  DIVOUT+1
+L6877:  STA  ZDIV
+L687A:  JMP  TRACK_40
+
+TRACK_30:
+L687D:  LDA  TEMP2                  ;C COMPUTE Y/X
+L687F:  STA  XPL
+L6882:  LDA  TEMP2+1
+L6884:  STA  XPH
+L6887:  LDA  TEMP1
+L6889:  STA  DIVOUT
+L688C:  LDA  TEMP1+1
+L688E:  STA  DIVOUT+1
+L6891:  STA  ZDIV
+
+TRACK_40:
+L6894:  JSR  WAIT
+L6897:  STA  TEMP3
+L6899:  LDA  MOUTHI
+L689C:  LSR                         ;C DOUBLE SHIFT RIGHT
+L689D:  ROR  TEMP3
+L689F:  LSR
+L68A0:  ROR  TEMP3
+L68A2:  LDX  TEMP3
+L68A4:  LDA  ARCTAN,X               ;C GET ARCTANGENT
+L68A7:  PLP                         ;D IF Y/X
+L68A8:  BCC  TRACK_45
+L68AA:  STA  TEMP3                  ;C SUBTRACT FROM 90 DEGREES
+L68AC:  LDA  #$40
+L68AE:  SBC  TEMP3
+
+TRACK_45:
+L68B0:  TAX                         ;C SET UP FOR DO CASE
+L68B1:  TYA
+L68B2:  ASL
+L68B3:  TAY
+L68B4:  LDA  TTAB+1,Y
+L68B7:  PHA
+L68B8:  LDA  TTAB,Y
+L68BB:  PHA
+L68BC:  TXA
+L68BD:  RTS
+
+TTAB:
+L68BE:  .word T_0-1, T_1-1, T_2-1, T_3-1
+
+;------------------------------------------------------------------------------
+; T_1 - [note] TTAB quadrant-1 entry: negate the arctangent-table angle (two's complement), then falls into
+;   T_2 to also flip it 180 degrees.
+;------------------------------------------------------------------------------
+T_1:
+L68C6:  CLC                         ;C PFM
+L68C7:  EOR  #$FF
+L68C9:  ADC  #$01
+
+;------------------------------------------------------------------------------
+; T_2 - [note] TTAB quadrant-2 entry: flip the arctangent-table angle 180 degrees (EOR #$80), then JMP T_0
+;   (RTS) with the finished angle in A.
+;------------------------------------------------------------------------------
+T_2:
+L68CB:  EOR  #$80
+L68CD:  JMP  T_0
+
+;------------------------------------------------------------------------------
+; T_3 - [note] TTAB quadrant-3 entry: negate the arctangent-table angle (two's complement), then falls into
+;   T_0 (RTS).
+;------------------------------------------------------------------------------
+T_3:
+L68D0:  CLC
+L68D1:  EOR  #$FF
+L68D3:  ADC  #$01
+
+;------------------------------------------------------------------------------
+; T_0 - [note] TTAB quadrant-0 entry, and the shared exit for T_2/T_3: RTS with the finished angle in A.
+;------------------------------------------------------------------------------
+T_0:
+L68D5:  RTS
+
+;------------------------------------------------------------------------------
+; OBJOBJ - OBJECT-OBJECT COLLISION DETECT
+;   ARCTANGENT TABLE CREATED 5-SEP-79
+;   BLOCK NAME: OBJOBJ
+;   DESCRIPTION: THIS ROUTINE WILL CHECK FOR
+;   COLLISION BETWEEN TANKS AND PLAYFIELD
+;   OBJECTS
+;   INPUT: (X)=0 FOR PLAYER TANK
+;   (X)=2 FOR ROBOT TANK
+;   TPOSX,TPOSX,PTBLO1,PTBLX1,PTBLY1,PROXTB
+;   OUTPUT PARMS: CARRY SET COLLISION, 0=NONTANK COLLISION, -1=TANK COLLISION IN(A)
+;   REGISTERS: DSTNCE
+;   USES: TEMP1,TEMP2,TEMP3
+;------------------------------------------------------------------------------
+OBJOBJ:
+L68D6:  CLC
+L68D7:  STX  TEMP1                  ;L SAVE X
+L68D9:  LDA  TPOSX,X                ;C SET UP MATH BOX
+L68DB:  STA  ACOS
+L68DE:  LDA  TPOSX+1,X
+L68E0:  STA  ACOS+1
+L68E3:  LDA  TPOSY,X
+L68E5:  STA  BSIN
+L68E8:  LDA  TPOSY+1,X
+L68EA:  STA  BSIN+1
+L68ED:  LDY  #$00
+
+OBJOBJ_10:
+L68EF:  LDA  PTBLO1,Y               ;D IF DONE
+L68F2:  BMI  OBJOBJ_50
+L68F4:  LDA  PTBLX1,Y               ;C GET DISTANCE TO OBJECT
+L68F7:  STA  TPOSXT
+L68FA:  LDA  PTBLX1+1,Y
+L68FD:  STA  TPOSXT+1
+L6900:  LDA  PTBLY1,Y
+L6903:  STA  TPOSYT
+L6906:  LDA  PTBLY1+1,Y
+L6909:  STA  DSTNCE
+L690C:  CMP  ($00,X)
+L690E:  LDA  MOUTLO
+L6911:  STA  TEMP3
+L6913:  LDA  MOUTHI
+L6916:  STA  TEMP3+1
+L6918:  TXA                         ;D IF ROBOT
+L6919:  BNE  OBJOBJ_20              ;C COLLIDE SO WE CAN SEE OBJECT
+L691B:  LDA  #$80
+L691D:  CMP  TEMP3
+L691F:  LDA  #$04
+L6921:  BNE  OBJOBJ_30
+
+OBJOBJ_20:
+L6923:  LDA  PTBLO1,Y
+L6926:  ASL
+L6927:  TAX
+L6928:  BIT  R2D3FL
+L692A:  BPL  OBJOBJ_25
+L692C:  LDA  TEMP3+1                ;C 3/4 TANK RADIUS
+L692E:  CMP  #$80
+L6930:  ROR
+L6931:  STA  TEMP2+1
+L6933:  LDA  TEMP3
+L6935:  ROR
+L6936:  CLC
+L6937:  ADC  TEMP3
+L6939:  STA  TEMP3
+L693B:  LDA  TEMP2+1
+L693D:  ADC  TEMP3+1
+L693F:  STA  TEMP3+1
+L6941:  BCC  OBJOBJ_25
+L6943:  LDX  TEMP1
+L6945:  BCS  OBJOBJ_40
+
+OBJOBJ_25:
+L6947:  LDA  PROXTB,X               ;D IF COLLISION
+L694A:  CMP  TEMP3
+L694C:  LDA  PROXTB+1,X
+L694F:  LDX  TEMP1
+
+OBJOBJ_30:
+L6951:  SBC  TEMP3+1
+L6953:  LDA  #$00                   ;C SET FOR NONTANK COLLISION
+L6955:  BCS  OBJOBJ_60
+
+OBJOBJ_40:
+L6957:  INY                         ;C NEXT OBJECT
+L6958:  INY
+L6959:  BNE  OBJOBJ_10              ;B
+
+OBJOBJ_50:
+L695B:  LDA  COLFLG                 ;D IF EITHER IN COLLISION
+L695D:  ORA  COLFLG+2
+L695F:  BNE  OBJOBJ_60
+L6961:  TXA
+L6962:  EOR  #$02
+L6964:  TAX
+L6965:  LDA  TPOSX,X
+L6967:  STA  TPOSXT
+L696A:  LDA  TPOSX+1,X
+L696C:  STA  TPOSXT+1
+L696F:  LDA  TPOSY,X
+L6971:  STA  TPOSYT
+L6974:  LDA  TPOSY+1,X
+L6976:  STA  DSTNCE
+L6979:  CMP  ($00,X)                ;WASTE TIME
+L697B:  LDA  MOUTLO
+L697E:  STA  TEMP3
+L6980:  LDA  MOUTHI
+L6983:  STA  TEMP3+1
+L6985:  LDA  #$05
+
+OBJOBJ_54:
+L6987:  BIT  R2D3FL                 ;SMALLER COLL. RADIUS FOR R2D3
+L6989:  BPL  OBJOBJ_55
+L698B:  LDA  #$03
+
+OBJOBJ_55:
+L698D:  SEC
+L698E:  SBC  TEMP3+1                ;CARRY SET IF COLL.
+L6990:  LDA  #$FF                   ;C INDICATE TANKS
+
+OBJOBJ_60:
+L6992:  LDX  TEMP1                  ;L RESTORE X
+L6994:  RTS
+
+PROXTB:
+L6995:  .word $0340, $0340
+L6999:  .word $0000                 ;.REPT 10.
+L699B:  .word $0000
+L699D:  .word $0000
+L699F:  .word $0000
+L69A1:  .word $0000
+L69A3:  .word $0000
+L69A5:  .word $0000
+L69A7:  .word $0000
+L69A9:  .word $0000
+L69AB:  .word $0000
+L69AD:  .word $0400, $0000, $0000, $03C0
+
+;------------------------------------------------------------------------------
+; TR7CHK - CHECK FOR HIGH POWERED TANK ROBOT
+;   BLOCK NAME: TR7CHK
+;   BLOCK DESCRIPTION: DETERMINES IF WE HAVE OR SHOULD HAVE
+;   THE TR7 INSTEAD OF THE OLD CLVUKER
+;   INPUT PARAMS: NOR2D3
+;   OUTPUT PARAMS: CARRY SET=TR7
+;   REGISTERS USED: A
+;------------------------------------------------------------------------------
+TR7CHK:
+L69B5:  CLC                         ;C ASSUME REGULAR TANK
+L69B6:  LDA  NOR2D3
+L69B9:  BMI  TR7CHK_10
+L69BB:  CMP  #$05                   ;C CLEAR CARRY FOR TANK
+
+TR7CHK_10:
+L69BD:  RTS
+
+;------------------------------------------------------------------------------
+; ROBCHK - ROBOT RESET CHECK
+;   BLOCK NAME: ROBCHK
+;   DESCRIPTION: ROBCHK WILL RANDOMNLY RESET HIS GOAL AND TAKE HIM
+;   OUT OF ATTACK MODE FOR A SHORT TIME, AS
+;   WELL AS MOVING HIM TO A NEW POSITION.
+;   INPUT: COLFLG
+;   OUTPUT: TPOSX,TPOSY,COLFLG,STATE,ACTION,RGOAL
+;   REGISTERS: A,X
+;   SUBROUTINES: RAND, OBJBOJ,ROBOT
+;------------------------------------------------------------------------------
+ROBCHK:
+L69BE:  LDA  GOVER
+L69C0:  BNE  TANKCK
+L69C2:  LDA  HITS+1
+L69C4:  BNE  ROBCHK_10
+L69C6:  LDA  OPTION
+L69C9:  LSR
+L69CA:  LSR
+L69CB:  AND  #$03
+L69CD:  TAX
+L69CE:  LDA  HITS                   ;D IF NOT BUZZ BOMB
+L69D0:  CMP  MISLVL,X
+L69D3:  BCC  TANKCK
+
+ROBCHK_10:
+L69D5:  LDY  PRAND                  ;C FUDGE POKEY RANDOMNESS
+L69D8:  TYA
+L69D9:  EOR  OLDRND
+L69DC:  STY  OLDRND
+L69DF:  LSR
+L69E0:  BCC  TANKCK
+L69E2:  LDA  #$02                   ;C SET SHORTER WAIT TIME
+L69E4:  STA  TIMOUT
+L69E6:  BNE  R2D3CK                 ;B
+
+;------------------------------------------------------------------------------
+; TANKCK - [note] ROBCHK: reset the robot as a plain tank - new random RGOAL, clear R2D3FL/COLFLG+2, short
+;   reaction/timeout (ACTION=TIMOUT=1); in attract mode also computes a random placement window
+;   ahead of the player, reaching ROB1 by a BEQ; otherwise (TANKCK_10) LDA #$0F and JMP ROB1 to
+;   pick the new position.
+;------------------------------------------------------------------------------
+TANKCK:
+L69E8:  LDA  PRAND                  ;C RESET GOAL
+L69EB:  STA  RGOAL
+L69ED:  LDA  #$00
+L69EF:  STA  R2D3FL                 ;C RESET TO TANK
+L69F1:  STA  COLFLG+2               ;C OUT OF COLLISION
+L69F3:  LDA  #$01                   ;C SET REACTION TIME SHORT
+L69F5:  STA  ACTION
+L69F7:  STA  TIMOUT
+L69F9:  BIT  ATRACT                 ;D IF ATRACT PUT TANK IN FRONT
+L69FB:  BPL  TANKCK_10
+L69FD:  LDA  HITS+1
+L69FF:  BNE  TANKCK_6
+L6A01:  SEC
+L6A02:  LDA  HITS                   ;C DETERMINE WINDOW FOR TANK
+L6A04:  SBC  HITS+2
+L6A06:  BCC  TANKCK_10
+L6A08:  BEQ  TANKCK_10
+L6A0A:  CMP  #$07
+L6A0C:  BCC  TANKCK_8
+
+TANKCK_6:
+L6A0E:  LDA  #$07
+
+TANKCK_8:
+L6A10:  LSR
+L6A11:  BEQ  TANKCK_10
+L6A13:  TAX
+L6A14:  LDA  #$0F
+
+TANKCK_9:
+L6A16:  SEC
+L6A17:  ROL
+L6A18:  DEX
+L6A19:  BNE  TANKCK_9
+L6A1B:  BEQ  ROB1
+
+TANKCK_10:
+L6A1D:  LDA  #$0F
+L6A1F:  JMP  ROB1
+
+;------------------------------------------------------------------------------
+; R2D3CK - [note] ROBCHK: (re)spawn the buzz bomber (R2D3) instead of a tank - increments NOR2D3, sets one
+;   explosion-table Z slot (EXPOSZ+$C/$D) to STARTZ (the buzz bomber's starting depth), sets
+;   STATE=$80 (the same 'attacking' flag R_ATCK sets - collision retreat is tracked in STATE's
+;   bits 0-1, not bit 7), forces the engine sound channels to their idle frequencies, and sets
+;   R2D3FL=-1.  Falls straight into ROB1 (no branch).
+;------------------------------------------------------------------------------
+R2D3CK:
+L6A22:  INC  NOR2D3                 ;C THIS WILL SET NOR2D3 TO 0 FOR FIRST
+L6A25:  LDA  #STARTZ/$100
+L6A27:  STA  EXPOSZ+$D
+L6A2A:  LDA  #STARTZ&$FF
+L6A2C:  STA  EXPOSZ+$C
+L6A2F:  LDA  #$80
+L6A31:  STA  STATE
+L6A33:  LDX  #$FF
+L6A35:  STX  CHAN3F
+L6A38:  DEX
+L6A39:  STX  CHAN4F
+L6A3C:  LDA  #$FF
+L6A3E:  STA  R2D3FL                 ;C PUT BUZZ BOMB IN FRONT TO HIM
+L6A40:  LDA  PRAND
+L6A43:  AND  #$0F
+
+ROB1:
+L6A45:  STA  TEMP1
+L6A47:  LDA  PRAND
+L6A4A:  AND  TEMP1
+L6A4C:  BIT  S_INTCT
+L6A4E:  BVS  ROB1_20
+L6A50:  EOR  #$FF
+
+ROB1_20:
+L6A52:  CLC
+L6A53:  ADC  TANGLE
+L6A55:  STA  TEMP1
+L6A57:  JSR  COS
+L6A5A:  STA  TEMP2                  ;C X=X-1/4*X
+L6A5C:  STA  X1
+L6A5E:  STX  X1+1
+L6A60:  TXA
+L6A61:  CMP  #$80
+L6A63:  ROR
+L6A64:  ROR  TEMP2
+L6A66:  CMP  #$80
+L6A68:  ROR
+L6A69:  ROR  TEMP2
+L6A6B:  STA  TEMP2+1
+L6A6D:  LDA  X1
+L6A6F:  SEC
+L6A70:  SBC  TEMP2
+L6A72:  STA  TEMP2
+L6A74:  LDA  X1+1
+L6A76:  SBC  TEMP2+1
+L6A78:  TAX
+L6A79:  BIT  R2D3FL
+L6A7B:  BMI  ROB1_45
+L6A7D:  LDA  PRAND
+L6A80:  LSR
+L6A81:  PHP
+L6A82:  TXA
+L6A83:  BCC  ROB1_45
+L6A85:  CMP  #$80
+L6A87:  ROR
+L6A88:  ROR  TEMP2
+
+ROB1_45:
+L6A8A:  STA  TEMP2+1
+L6A8C:  LDA  TEMP1
+L6A8E:  JSR  SIN
+L6A91:  STA  TEMP1                  ;C Y=Y-1/4*Y
+L6A93:  STA  Y1
+L6A95:  STX  Y1+1
+L6A97:  TXA
+L6A98:  CMP  #$80
+L6A9A:  ROR
+L6A9B:  ROR  TEMP1
+L6A9D:  CMP  #$80
+L6A9F:  ROR
+L6AA0:  ROR  TEMP1
+L6AA2:  STA  TEMP1+1
+L6AA4:  SEC
+L6AA5:  LDA  Y1
+L6AA7:  SBC  TEMP1
+L6AA9:  STA  TEMP1
+L6AAB:  LDA  Y1+1
+L6AAD:  SBC  TEMP1+1
+L6AAF:  BIT  R2D3FL
+L6AB1:  BMI  ROB1_49
+L6AB3:  PLP
+L6AB4:  BCC  ROB1_49
+L6AB6:  CMP  #$80
+L6AB8:  ROR
+L6AB9:  ROR  TEMP1
+
+ROB1_49:
+L6ABB:  STA  TEMP1+1                ;C SET UP STARTING POS
+L6ABD:  CLC
+L6ABE:  LDA  TPOSX
+L6AC0:  ADC  TEMP2
+L6AC2:  STA  TPOSX+2
+L6AC4:  LDA  TPOSX+1
+L6AC6:  ADC  TEMP2+1
+L6AC8:  STA  TPOSX+3
+L6ACA:  LDA  TPOSY
+L6ACC:  CLC
+L6ACD:  ADC  TEMP1
+L6ACF:  STA  TPOSY+2
+L6AD1:  LDA  TPOSY+1
+L6AD3:  ADC  TEMP1+1
+L6AD5:  STA  TPOSY+3
+L6AD7:  BIT  R2D3FL
+L6AD9:  BPL  ROB1_50
+L6ADB:  JSR  TRACK                  ;C SET UP STARTING ANGLE
+L6ADE:  STA  TANGLE+2
+L6AE0:  STA  RGOAL
+
+ROB1_50:
+L6AE2:  LDA  #$00
+L6AE4:  STA  EIRNGE
+L6AE6:  STA  FTIMER
+L6AE8:  RTS
+
+;------------------------------------------------------------------------------
+; DRADAR - DISPLAY RADAR
+;   BLOCK NAME: DRADAR
+;   DESCRIPTION: THIS ROUTINE WILL DISPLAY RADAR SWEEP
+;   AND BLIP OF OTHER TANK, IF WITH FIRING RANGE
+;   INPUT PARAMETERS: SANGLE,(TEMP1,TEMP2) SET UP BY TRACK ROUTINE
+;   OUTPUT PARAMETERS: TDIST
+;   REGISTERS: A,X,Y
+;   SUBROUTINES: TRACK,SIN,COS,VGLABS,VGVCTR
+;------------------------------------------------------------------------------
+DRADAR:
+L6AE9:  LDX  #<RDRING               ;LXL RDRING
+L6AEB:  LDA  #>RDRING               ;LAH RDRING
+L6AED:  JSR  VGJSRL
+L6AF0:  LDA  #$00
+L6AF2:  STA  XCOMP+1
+L6AF4:  STA  YCOMP+1
+L6AF6:  STA  CURNTX+1
+L6AF8:  LDA  #$0B                   ;C INCREMENT SWEEP ANGLE
+L6AFA:  CLC
+L6AFB:  ADC  SANGLE
+L6AFD:  STA  SANGLE
+L6AFF:  JSR  SIN                    ;C SIN/2
+L6B02:  TXA
+L6B03:  CMP  #$80
+L6B05:  ROR
+L6B06:  STA  XCOMP
+L6B08:  STA  CURNTX
+L6B0A:  BPL  DRADAR_10
+L6B0C:  LDA  #$FF
+L6B0E:  STA  XCOMP+1
+L6B10:  STA  CURNTX+1
+
+DRADAR_10:
+L6B12:  LDA  SANGLE                 ;C COS/2
+L6B14:  JSR  COS
+L6B17:  TXA
+L6B18:  CMP  #$80
+L6B1A:  ROR
+L6B1B:  STA  XCOMP+2
+L6B1D:  BPL  DRADAR_20
+L6B1F:  LDA  #$FF
+L6B21:  STA  XCOMP+3
+
+DRADAR_20:
+L6B23:  LDA  #$A0                   ;C DRAW BRIGHT VECTOR
+L6B25:  STA  VGBRIT
+L6B27:  LDA  #CENTRY&$FF
+L6B29:  CLC
+L6B2A:  ADC  XCOMP+2
+L6B2C:  STA  CURNTY
+L6B2E:  LDA  #CENTRY/$100
+L6B30:  ADC  XCOMP+3
+L6B32:  STA  CURNTY+1
+L6B34:  JSR  VGVTR2
+L6B37:  LDA  COLFLG+2               ;D IF NOT EXPLODING
+L6B39:  BEQ  DRADAR_21
+L6B3B:  LDA  #$00
+L6B3D:  STA  CHAN3V
+L6B40:  STA  CHAN4V
+L6B43:  RTS
+
+DRADAR_21:
+L6B44:  JSR  TRACK                  ;C TRACK THE ROBOT
+L6B47:  EOR  #$80
+L6B49:  SEC
+L6B4A:  STA  GARBAG                 ;C RELATIVE ANGLE OF ROBOT
+L6B4C:  LDA  TANGLE
+L6B4E:  SBC  GARBAG
+L6B50:  STA  GARBAG
+L6B52:  LDA  SANGLE                 ;D IF NOT ON SWEEP LINE
+L6B54:  SEC
+L6B55:  SBC  GARBAG
+L6B57:  BMI  DRADAR_23
+L6B59:  CMP  #$0C
+L6B5B:  BCS  DRADAR_23
+L6B5D:  LDA  #$F0                   ;C SET BRIGHTNESS OF BLIP
+L6B5F:  STA  BLIP
+
+DRADAR_23:
+L6B62:  LDA  TEMP1                  ;C COMPUTE DISTANCE
+L6B64:  STA  TPOSXT
+L6B67:  LDA  TEMP1+1
+L6B69:  STA  TPOSXT+1
+L6B6C:  LDA  TEMP2
+L6B6E:  STA  TPOSYT
+L6B71:  LDA  TEMP2+1
+L6B73:  STA  TPOSYT+1
+L6B76:  STA  DST2
+L6B79:  CMP  ($00,X)
+L6B7B:  LDA  MOUTLO
+L6B7E:  STA  TEMP3
+L6B80:  LDA  MOUTHI
+L6B83:  STA  TDIST
+L6B86:  TAX
+L6B87:  BMI  DRADAR_24
+L6B89:  LSR                         ;C SET VOLUME
+L6B8A:  LSR
+L6B8B:  LSR
+L6B8C:  AND  #$0F
+L6B8E:  EOR  #$AF
+L6B90:  BIT  R2D3FL
+L6B92:  BMI  DRADAR_25
+
+DRADAR_24:
+L6B94:  LDA  #$00
+
+DRADAR_25:
+L6B96:  STA  CHAN3V
+L6B99:  STA  CHAN4V
+L6B9C:  TXA
+L6B9D:  STA  XMATRX
+L6BA0:  CMP  #$80                   ;D IF OUT OF RANGE
+L6BA2:  BCC  DRADAR_35
+L6BA4:  LDA  #$00
+L6BA6:  STA  EIRNGE                 ;C OUT OF RANGE
+L6BA8:  BIT  R2D3FL
+L6BAA:  BPL  DRADAR_30
+L6BAC:  LDA  TIMOUT                 ;D IF NOT TIMED OUT ON R2D3'S
+L6BAE:  CMP  #$04
+L6BB0:  BCC  DRADAR_27
+L6BB2:  JSR  TANKCK
+L6BB5:  JMP  DR_BLP
+
+DRADAR_27:
+L6BB8:  JSR  R2D3CK
+
+DRADAR_30:
+L6BBB:  JMP  DR_BLP
+
+DRADAR_35:
+L6BBE:  LDA  BLIP                   ;D IF SWEEP TOO LATE
+L6BC1:  BNE  DRADAR_36
+L6BC3:  RTS
+
+DRADAR_36:
+L6BC4:  CMP  #$F0
+L6BC6:  BCC  DRADAR_40
+L6BC8:  LDA  #RBEEP
+L6BCA:  JSR  SNDON
+
+DRADAR_40:
+L6BCD:  LDA  GARBAG                 ;C SETUP SIN FOR MAXTRIX MULT
+L6BCF:  JSR  SIN
+L6BD2:  STA  ACOS
+L6BD5:  STX  ACOS+1
+L6BD8:  LDA  GARBAG
+L6BDA:  JSR  COS                    ;C SETUP COS FOR MATRIX MULT
+L6BDD:  STA  BSIN
+L6BE0:  STX  BSIN+1
+L6BE3:  LDA  #CENTRX&$FF
+L6BE5:  STA  TPOSXT
+L6BE8:  LDA  #CENTRX/$100
+L6BEA:  STA  TPOSXT+1
+L6BED:  LDA  #CENTRY&$FF
+L6BEF:  STA  TPOSYT
+L6BF2:  LDA  #CENTRY/$100
+L6BF4:  STA  TPOSYT+1
+L6BF7:  LDA  #$00
+L6BF9:  STA  XMATRX+1
+L6BFC:  STA  VGBRIT                 ;C SET ZERO BRITE
+L6BFE:  STA  YMATRX                 ;C START MATRIX MULT
+L6C01:  STA  YSTRT2
+L6C04:  JSR  WAIT                   ;C SCALE RESLT
+L6C07:  STA  DXP
+L6C0A:  LDA  MOUTLO
+L6C0D:  SEC
+L6C0E:  SBC  CURNTX
+L6C10:  STA  XCOMP
+L6C12:  LDA  MOUTHI
+L6C15:  STA  DYPH                   ;RESTAT MULTIPLIER
+L6C18:  SBC  CURNTX+1
+L6C1A:  STA  XCOMP+1
+L6C1C:  LDA  MOUTLO
+L6C1F:  SEC
+L6C20:  SBC  CURNTY
+L6C22:  STA  YCOMP
+L6C24:  LDA  MOUTHI
+L6C27:  SBC  CURNTY+1
+L6C29:  STA  YCOMP+1
+L6C2B:  JSR  VGVTR2
+L6C2E:  LDA  BLIP                   ;C DRAW BLIP
+L6C31:  AND  #$E0
+L6C33:  JSR  VGDOT
+L6C36:  LDA  VGBRIT
+L6C38:  JSR  VGDOT
+L6C3B:  BIT  ATRACT                 ;D IF IN GAME
+L6C3D:  BMI  D_5
+L6C3F:  BIT  LOGO                   ;D IF LOGO IS BEING DRAWN
+L6C42:  BMI  D_10
+
+D_5:
+L6C44:  LDA  #$02
+L6C46:  AND  FRAME
+L6C48:  BEQ  D_10
+L6C4A:  LDX  #ERANGE                ;C INDICATE IN RANGE
+L6C4C:  JSR  MSGS
+
+D_10:
+L6C4F:  LDA  EIRNGE                 ;D IF ALREADY IN RANGE
+L6C51:  BNE  DR_BLP                 ;C DRAW BLIP
+L6C53:  INC  EIRNGE                 ;C INDICATE IN RANGE
+L6C55:  LDA  #WARNG                 ;C OUTPUT WARNING SOUND
+L6C57:  JSR  SNDON
+
+DR_BLP:
+L6C5A:  LDA  BLIP                   ;D IF SWEEP WAY PAST
+L6C5D:  BEQ  DR_RTN
+L6C5F:  SEC
+L6C60:  SBC  #$08
+L6C62:  STA  BLIP
+
+DR_RTN:
+L6C65:  RTS
+
+;------------------------------------------------------------------------------
+; SHUPDT - UPDATE SHELL POSITION
+;   BLOCK NAME: SHUPDT
+;   DESCRIPTION: UPDATES SHELLS POSITION
+;   INPUT PARAMS: SHELLX,SHELLY,SINCX,SINCY
+;   OUTPUT PARAMS: SHELLX,SHELLY
+;   REGISTERS: A,X
+;------------------------------------------------------------------------------
+SHUPDT:
+L6C66:  LDX  #$02                   ;C START WITH SECOND SHELL
+
+SHUPDT_10:
+L6C68:  LDA  FIRECT,X               ;D IF SHELL NOT IN AIR
+L6C6A:  BEQ  SHUPDT_20
+L6C6C:  BMI  SHUPDT_20
+L6C6E:  DEC  FIRECT,X               ;C RANGE SHELL
+L6C70:  CLC
+L6C71:  LDA  SHELLX,X               ;C UPDATE SHELL'S X POS
+L6C73:  ADC  SINCX,X
+L6C75:  STA  SHELLX,X
+L6C77:  LDA  SHELLX+1,X
+L6C79:  ADC  SINCX+1,X
+L6C7B:  STA  SHELLX+1,X
+L6C7D:  LDA  SHELLY,X               ;C UPDATE SHELL'S Y POS
+L6C7F:  CLC
+L6C80:  ADC  SINCY,X
+L6C82:  STA  SHELLY,X
+L6C84:  LDA  SHELLY+1,X
+L6C86:  ADC  SINCY+1,X
+L6C88:  STA  SHELLY+1,X
+
+SHUPDT_20:
+L6C8A:  DEX
+L6C8B:  DEX
+L6C8C:  BEQ  SHUPDT_10
+L6C8E:  RTS
+
+CHKS5:
+L6C8F:  .byte $6B
+
+;.SBTTL MESSAGE ROUTINE
+
+LNGTBL:
+;BLOCK NAME: MSGS
+;DESCRIPTION: WILL OUTPUT SPECIFIED MESSAGE TO SPECIFIED LOCATION ON SCREEN
+;INPUT PARAMS: (X)=MESSAGE # * 2
+;OUTPUT PARAMS: NONE
+;REGISTERS: A,X,Y
+L6C90:  .word ENGLISH-1, GERMAN-1, FRENCH-1, SPANSH-1
+
+;------------------------------------------------------------------------------
+; MSGS - C OUTPUT BONUS MESSAGE  (comment at the call)
+;------------------------------------------------------------------------------
+MSGS:
+L6C98:  LDA  OPTION                 ;D DO CASE LANGUAGE
+L6C9B:  ROL
+L6C9C:  ROL
+L6C9D:  ROL
+L6C9E:  ROL
+L6C9F:  AND  #$06
+L6CA1:  TAY
+L6CA2:  LDA  LNGTBL+1,Y
+L6CA5:  PHA
+L6CA6:  LDA  LNGTBL,Y
+L6CA9:  PHA
+L6CAA:  RTS
+
+;------------------------------------------------------------------------------
+; SPANSH - [note] MSGS's LNGTBL entry for Spanish: point TBLPTR at SPNMSG for message X*2, then fall into MSTART
+;   to draw it.
+;------------------------------------------------------------------------------
+SPANSH:
+L6CAB:  LDA  SPNMSG,X
+L6CAE:  STA  TBLPTR
+L6CB0:  LDA  SPNMSG+1,X
+L6CB3:  JMP  MSTART
+
+;------------------------------------------------------------------------------
+; FRENCH - [note] MSGS's LNGTBL entry for French: point TBLPTR at FRNMSG, then fall into MSTART.
+;------------------------------------------------------------------------------
+FRENCH:
+L6CB6:  LDA  FRNMSG,X
+L6CB9:  STA  TBLPTR
+L6CBB:  LDA  FRNMSG+1,X
+L6CBE:  JMP  MSTART
+
+;------------------------------------------------------------------------------
+; GERMAN - [note] MSGS's LNGTBL entry for German: point TBLPTR at GRMMSG, then fall into MSTART.
+;------------------------------------------------------------------------------
+GERMAN:
+L6CC1:  LDA  GRMMSG,X
+L6CC4:  STA  TBLPTR
+L6CC6:  LDA  GRMMSG+1,X
+L6CC9:  JMP  MSTART
+
+;------------------------------------------------------------------------------
+; ENGLISH - [note] MSGS's LNGTBL entry for English (OPTION language bits = 0): point TBLPTR at ENGMSG for
+;   message X*2, then fall into MSTART to draw it.
+;------------------------------------------------------------------------------
+ENGLISH:
+L6CCC:  LDA  ENGMSG,X               ;C SET UP POINTER
+L6CCF:  STA  TBLPTR
+L6CD1:  LDA  ENGMSG+1,X
+
+MSTART:
+L6CD4:  STA  TBLPTR+1
+L6CD6:  LDY  #$00
+L6CD8:  TXA
+L6CD9:  CMP  #GAMOVR
+L6CDB:  LDA  #$02                   ;C SET SCALING
+L6CDD:  BCC  MSTART_5
+L6CDF:  LDA  #$01
+
+MSTART_5:
+L6CE1:  STA  TEMP3+1
+L6CE3:  LDA  (TBLPTR),Y
+L6CE5:  INY                         ;D IF NO POSITIONING NEEDED
+L6CE6:  ORA  (TBLPTR),Y
+L6CE8:  BEQ  MSTART_10
+;C POSITION FOR MSG
+L6CEA:  JSR  VGCNTR
+L6CED:  LDY  #$01
+L6CEF:  LDA  (TBLPTR),Y
+L6CF1:  TAX
+L6CF2:  DEY
+L6CF3:  LDA  (TBLPTR),Y
+L6CF5:  JSR  VGVTR
+
+MSTART_10:
+L6CF8:  LDA  TEMP3+1
+L6CFA:  JSR  VGSCA1
+L6CFD:  LDY  #$02                   ;C INIT LOOP
+L6CFF:  LDA  #$00                   ;C INIT VGLIST OFFSET
+L6D01:  STA  TEMP1
+
+MSTART_20:
+L6D03:  LDA  (TBLPTR),Y             ;C GET CHARACTER REPRESENTATION
+L6D05:  STA  TEMP2
+L6D07:  AND  #$7F
+L6D09:  INY
+L6D0A:  STY  TEMP3                  ;SAVE Y
+L6D0C:  TAX
+L6D0D:  LDA  VGMSGA,X               ;C GET CORRECT JSRL
+L6D10:  LDY  TEMP1
+L6D12:  STA  (VGLIST),Y
+L6D14:  INY
+L6D15:  LDA  VGMSGA+1,X
+L6D18:  STA  (VGLIST),Y
+L6D1A:  INY
+L6D1B:  STY  TEMP1                  ;SAVE Y
+L6D1D:  LDY  TEMP3                  ;C GET CHARACTER PTR
+L6D1F:  BIT  TEMP2                  ;D IF NOT END OF STRING
+L6D21:  BPL  MSTART_20
+L6D23:  LDY  TEMP1                  ;C UPDATE VGLIST
+L6D25:  DEY
+L6D26:  JSR  VGADD
+L6D29:  LDA  #$01                   ;C RESET SCALE
+L6D2B:  JMP  VGSCA1
+
+;------------------------------------------------------------------------------
+; INFO - INFORMATION OUTPUT
+;   BLOCK NAME: INFO
+;   DESCRIPTION: HANDLES MESSAGES & STATISTICS
+;   INPUT PARAMS: HITS
+;   OUTPUT PARAMS: NONE
+;   REGISTERS: A,X,Y
+;   SUBROUTINES: MSGS
+;------------------------------------------------------------------------------
+INFO:
+L6D2E:  JSR  VGCNTR
+L6D31:  LDY  #$00
+L6D33:  STY  VGSIZE
+L6D35:  LDX  #$5A                   ;C Y/4
+L6D37:  LDA  #$20                   ;C X/4
+L6D39:  JSR  VGVTR
+L6D3C:  LDA  LIVES                  ;D IF DEAD
+L6D3E:  BEQ  INFO_20
+L6D40:  STA  TEMP1
+L6D42:  LDY  #$00
+L6D44:  LDX  TSYMBL+1
+
+INFO_10:
+L6D47:  LDA  TSYMBL                 ;C OUTPUT 1 TANK PER LIFE
+L6D4A:  STA  (VGLIST),Y
+L6D4C:  TXA
+L6D4D:  INY
+L6D4E:  STA  (VGLIST),Y
+L6D50:  INY
+L6D51:  DEC  TEMP1
+L6D53:  BNE  INFO_10
+L6D55:  DEY
+L6D56:  JSR  VGADD
+
+INFO_20:
+L6D59:  LDX  #YSCORE
+L6D5B:  JSR  MSGS
+L6D5E:  LDY  #$00
+L6D60:  LDX  #$00                   ;C LABS SHORT FORM (Y/4)
+L6D62:  LDA  #$D6                   ;(X/4)
+L6D64:  JSR  VGVTR
+L6D67:  LDA  #HITS
+L6D69:  JSR  DIGT2S
+L6D6C:  LDX  #CHISCR
+L6D6E:  JSR  MSGS
+L6D71:  LDA  #$02
+L6D73:  JSR  VGSCA1
+L6D76:  LDY  #$00
+L6D78:  LDX  #$00
+L6D7A:  LDA  #$D6
+L6D7C:  JSR  VGVTR
+L6D7F:  LDA  HSCTBL
+L6D82:  STA  TEMP2
+L6D84:  LDA  HSCTBL+1
+L6D87:  STA  TEMP2+1
+L6D89:  LDA  #TEMP2
+L6D8B:  JSR  DIGT2S
+L6D8E:  LDA  #$01                   ;C RESET SCALE INFO
+L6D90:  JMP  VGSCA1
+
+;.SBTTL DATA STRUCTURES
+
+ENGMSG:
+L6D93:  .word ETOMSG, LFTMSG, RITMSG, RERMSG
+L6D9B:  .word L2MSG, L3MSG, L4MSG, CHIMSG
+L6DA3:  .word RNGMSG, BLKMSG, GMOMSG, PSTMSG
+L6DAB:  .word YSCMSG, HISMSG, ZERMSG, L1MSG
+L6DB3:  .word COIN1, COIN2, COIN3, COIN4
+L6DBB:  .word INSMSG, BONMSG, BONMS1, CPYMSG
+
+ETOMSG:
+L6DC3:  .byte $92, $4A, $1E, $30, $1E, $2E, $46, $00 ;ASCVH ETO,-110.,74.,<ENEMY TO >
+L6DCB:  .byte $3C, $32, $80
+
+LFTMSG:
+L6DCE:  .byte $00, $00, $2C, $1E, $20, $BC ;ASCVH LEFT,0,0,<LEFT>
+
+RITMSG:
+L6DD4:  .byte $00, $00, $38, $26, $22, $24, $BC ;ASCVH RIGHT,0,0,<RIGHT>
+
+RERMSG:
+L6DDB:  .byte $00, $00, $38, $1E, $16, $B8 ;ASCVH REAR,0,0,<REAR>
+
+L2MSG:
+L6DE1:  .byte $07, $1A, $1E, $30, $3C, $1E, $38, $00 ;ASCVH LINE2,7.,26.,<ENTER YOUR INITIALS>
+L6DE9:  .byte $46, $32, $3E, $38, $00, $26, $30, $26
+L6DF1:  .byte $3C, $26, $16, $2C, $BA
+
+L3MSG:
+L6DF6:  .byte $C4, $10, $1A, $24, $16, $30, $22, $1E ;ASCVH LINE3,-60.,16.,<CHANGE LETTER WITH RIGHT HAND CONTROLLER>
+L6DFE:  .byte $00, $2C, $1E, $3C, $3C, $1E, $38, $00
+L6E06:  .byte $42, $26, $3C, $24, $00, $38, $26, $22
+L6E0E:  .byte $24, $3C, $00, $24, $16, $30, $1C, $00
+L6E16:  .byte $1A, $32, $30, $3C, $38, $32, $2C, $2C
+L6E1E:  .byte $1E, $B8
+
+L4MSG:
+L6E20:  .byte $D3, $08, $3A, $1E, $2C, $1E, $1A, $3C ;ASCVH LINE4,-45.,8.,<SELECT LETTER WITH FIRE BUTTON>
+L6E28:  .byte $00, $2C, $1E, $3C, $3C, $1E, $38, $00
+L6E30:  .byte $42, $26, $3C, $24, $00, $20, $26, $38
+L6E38:  .byte $1E, $00, $18, $3E, $3C, $3C, $32, $B0
+
+CHIMSG:
+L6E40:  .byte $20, $46, $24, $26, $22, $24, $00, $3A ;ASCVH CHISCR,32.,70.,<HIGH SCORE 000>
+L6E48:  .byte $1A, $32, $38, $1E, $00, $00, $00, $00
+L6E50:  .byte $00, $00, $02, $02, $82
+
+RNGMSG:
+L6E55:  .byte $92, $5A, $1E, $30, $1E, $2E, $46, $00 ;ASCVH ERANGE,-110.,90.,<ENEMY IN RANGE>
+L6E5D:  .byte $26, $30, $00, $38, $16, $30, $22, $9E
+
+BLKMSG:
+L6E65:  .byte $92, $52, $2E, $32, $3C, $26, $32, $30 ;ASCVH BLOCKD,-110.,82.,<MOTION BLOCKED BY OBJECT>
+L6E6D:  .byte $00, $18, $2C, $32, $1A, $2A, $1E, $1C
+L6E75:  .byte $00, $18, $46, $00, $32, $18, $28, $1E
+L6E7D:  .byte $1A, $BC
+
+GMOMSG:
+L6E7F:  .byte $E4, $18, $22, $16, $2E, $1E, $00, $32 ;ASCVH GAMOVR,-28.,24.,<GAME OVER>
+L6E87:  .byte $40, $1E, $B8
+
+PSTMSG:
+L6E8A:  .byte $DE, $00, $34, $38, $1E, $3A, $3A, $00 ;ASCVH PRSTRT,-34.,0.,<PRESS START>
+L6E92:  .byte $3A, $3C, $16, $38, $BC
+
+YSCMSG:
+L6E97:  .byte $20, $50, $3A, $1A, $32, $38, $1E, $00 ;ASCVH YSCORE,32.,80.,<SCORE 000>
+L6E9F:  .byte $00, $00, $00, $00, $02, $02, $82
+
+HISMSG:
+L6EA6:  .byte $E4, $28, $24, $26, $22, $24, $00, $3A ;ASCVH HISCOR,-28.,40.,<HIGH SCORES>
+L6EAE:  .byte $1A, $32, $38, $1E, $BA
+
+ZERMSG:
+L6EB3:  .byte $00, $00, $02, $02, $02, $80 ;ASCVH ZEROS,0,0,<000 >
+
+L1MSG:
+L6EB9:  .byte $C0, $18, $22, $38, $1E, $16, $3C, $00 ;ASCVH LINE1,-64.,24.,<GREAT SCORE>
+L6EC1:  .byte $3A, $1A, $32, $38, $9E
+
+COIN1:
+L6EC6:  .byte $CE, $00, $04, $00, $00, $00, $00, $00 ;ASCVH MODE1,-50.,0.,<1 2 S>
+L6ECE:  .byte $00, $00, $06, $00, $00, $00, $00, $00
+L6ED6:  .byte $BA
+
+COIN2:
+L6ED7:  .byte $CE, $00, $04, $00, $00, $00, $00, $00 ;ASCVH MODE2,-50.,0.,<1 1>
+L6EDF:  .byte $00, $00, $84
+
+COIN3:
+L6EE2:  .byte $CE, $00, $06, $00, $00, $00, $00, $00 ;ASCVH MODE3,-50.,0.,<2 S 1>
+L6EEA:  .byte $3A, $00, $84
+
+COIN4:
+L6EED:  .byte $CE, $00, $00, $00, $1A, $32, $26, $30 ;ASCVH CONPLY,-50.,0.,< COIN PLAY>
+L6EF5:  .byte $00, $00, $00, $00, $34, $2C, $16, $C6
+
+INSMSG:
+L6EFD:  .byte $DC, $EA, $26, $30, $3A, $1E, $38, $3C ;ASCVH INSCON,-36.,-22.,<INSERT COIN>
+L6F05:  .byte $00, $1A, $32, $26, $B0
+
+BONMSG:
+L6F0A:  .byte $A9, $BA, $18, $32, $30, $3E, $3A, $00 ;ASCVH BONPLN,-87.,-70.,<BONUS TANK AT >
+L6F12:  .byte $3C, $16, $30, $2A, $00, $16, $3C, $80
+
+BONMS1:
+L6F1A:  .byte $00, $00, $02, $02, $02, $00, $16, $30 ;ASCVH BONPL1,0,0,<000 AND 100000>
+L6F22:  .byte $1C, $00, $04, $02, $02, $02, $02, $82
+
+CPYMSG:
+L6F2A:  .byte $D6, $C4, $4E, $50
+L6F2E:  .byte $00, $00, $16, $3C, $16, $38, $26, $00 ;.ASCVG < ATARI 1980>
+L6F36:  .byte $04, $14, $12, $82
+
+FRNMSG:
+L6F3A:  .word FR1, FR2, FR3, FR4
+L6F42:  .word FR5, FR6, FR7, FR8
+L6F4A:  .word FR9, FRA, FRB, FRC
+L6F52:  .word YSCMSG, FRE, ZERMSG, FR10
+L6F5A:  .word FR11, FR12, FR13, FR14
+L6F62:  .word FR15, FR16, FR17, CPYMSG
+
+FR1:
+L6F6A:  .byte $88, $4A, $1E, $30, $30, $1E, $2E, $26 ;ASCVL -120.,74.,<ENNEMI >
+L6F72:  .byte $80
+
+FR2:
+L6F73:  .byte $00, $00, $16, $00, $22, $16, $3E, $1A ;ASCVL 0,0,<A GAUCHE>
+L6F7B:  .byte $24, $9E
+
+FR3:
+L6F7D:  .byte $00, $00, $16, $00, $1C, $38, $32, $26 ;ASCVL 0,0,<A DROITE>
+L6F85:  .byte $3C, $9E
+
+FR4:
+L6F87:  .byte $00, $00, $1C, $1E, $38, $38, $26, $1E ;ASCVL 0,0,<DERRIERE>
+L6F8F:  .byte $38, $9E
+
+FR5:
+L6F91:  .byte $07, $1A, $1A, $32, $2E, $34, $32, $3A ;ASCVL 7,26.,<COMPOSER VOS INITIALES>
+L6F99:  .byte $1E, $38, $00, $40, $32, $3A, $00, $26
+L6FA1:  .byte $30, $26, $3C, $26, $16, $2C, $1E, $BA
+
+FR6:
+L6FA9:  .byte $B4, $10, $1A, $24, $32, $26, $3A, $26 ;ASCVL -76.,16.,<CHOISISSEZ VOTRE LETTRE AVEC LE CONTROLEUR DE DROITE>
+L6FB1:  .byte $3A, $3A, $1E, $48, $00, $40, $32, $3C
+L6FB9:  .byte $38, $1E, $00, $2C, $1E, $3C, $3C, $38
+L6FC1:  .byte $1E, $00, $16, $40, $1E, $1A, $00, $2C
+L6FC9:  .byte $1E, $00, $1A, $32, $30, $3C, $38, $32
+L6FD1:  .byte $2C, $1E, $3E, $38, $00, $1C, $1E, $00
+L6FD9:  .byte $1C, $38, $32, $26, $3C, $9E
+
+FR7:
+L6FDF:  .byte $BF, $08, $16, $34, $34, $3E, $46, $1E ;ASCVL -65.,8.,<APPUYER SUR FEU POUR SELECTION DE LETTRE>
+L6FE7:  .byte $38, $00, $3A, $3E, $38, $00, $20, $1E
+L6FEF:  .byte $3E, $00, $34, $32, $3E, $38, $00, $3A
+L6FF7:  .byte $1E, $2C, $1E, $1A, $3C, $26, $32, $30
+L6FFF:  .byte $00, $1C, $1E, $00, $2C, $1E, $3C, $3C
+L7007:  .byte $38, $9E
+
+FR8:
+L7009:  .byte $20, $46, $2E, $1E, $26, $2C, $2C, $1E ;ASCVL 32.,70.,<MEILLEUR SCORE 000>
+L7011:  .byte $3E, $38, $00, $3A, $1A, $32, $38, $1E
+L7019:  .byte $00, $00, $00, $00, $00, $00, $02, $02
+L7021:  .byte $82
+
+FR9:
+L7022:  .byte $88, $5A, $1E, $30, $30, $1E, $2E, $26 ;ASCVL -120.,90.,<ENNEMI A PORTEE>
+L702A:  .byte $00, $16, $00, $34, $32, $38, $3C, $1E
+L7032:  .byte $9E
+
+FRA:
+L7033:  .byte $88, $52, $16, $3C, $3C, $1E, $30, $3C ;ASCVL -120.,82.,<ATTENTION OBSTACLE>
+L703B:  .byte $26, $32, $30, $00, $32, $18, $3A, $3C
+L7043:  .byte $16, $1A, $2C, $9E
+
+FRB:
+L7047:  .byte $E0, $18, $20, $26, $30, $00, $1C, $1E ;ASCVL -32.,24.,<FIN DE PARTIE>
+L704F:  .byte $00, $34, $16, $38, $3C, $26, $9E
+
+FRC:
+L7056:  .byte $CE, $00, $16, $34, $34, $3E, $46, $1E ;ASCVL -50.,0,<APPUYEZ SUR START>
+L705E:  .byte $48, $00, $3A, $3E, $38, $00, $3A, $3C
+L7066:  .byte $16, $38, $BC
+
+FRE:
+L7069:  .byte $DC, $28, $2E, $1E, $26, $2C, $2C, $1E ;ASCVL -36.,40.,<MEILLEURS SCORE>
+L7071:  .byte $3E, $38, $3A, $00, $3A, $1A, $32, $38
+L7079:  .byte $9E
+
+FR10:
+L707A:  .byte $C0, $18, $3A, $1A, $32, $38, $1E, $00 ;ASCVL -64.,24.,<SCORE ELEVE>
+L7082:  .byte $1E, $2C, $1E, $40, $9E
+
+FR11:
+L7087:  .byte $C6, $00, $04, $00, $00, $00, $00, $00 ;ASCVL -58.,0,<1 2 S>
+L708F:  .byte $00, $00, $00, $06, $00, $00, $00, $00
+L7097:  .byte $00, $00, $00, $BA
+
+FR12:
+L709B:  .byte $C6, $00, $04, $00, $00, $00, $00, $00 ;ASCVL -58.,0,<1 1>
+L70A3:  .byte $00, $00, $00, $84
+
+FR13:
+L70A7:  .byte $C6, $00, $06, $00, $00, $00, $00, $00 ;ASCVL -58.,0,<2 S 1>
+L70AF:  .byte $00, $3A, $00, $84
+
+FR14:
+L70B3:  .byte $C6, $00, $00, $00, $34, $26, $1E, $1A ;ASCVL -58.,0,< PIECE JOUEUR>
+L70BB:  .byte $1E, $00, $00, $00, $00, $28, $32, $3E
+L70C3:  .byte $1E, $3E, $B8
+
+FR15:
+L70C6:  .byte $CA, $EA, $26, $30, $3C, $38, $32, $1C ;ASCVL -54.,-22.,<INTRODUIRE LES PIECES>
+L70CE:  .byte $3E, $26, $38, $1E, $00, $2C, $1E, $3A
+L70D6:  .byte $00, $34, $26, $1E, $1A, $1E, $BA
+
+FR16:
+L70DD:  .byte $BE, $BA, $18, $32, $30, $3E, $3A, $00 ;ASCVL -66.,-70.,<BONUS A >
+L70E5:  .byte $16, $80
+
+FR17:
+L70E7:  .byte $00, $00, $02, $02, $02, $00, $1E, $3C ;ASCVL 0,0,<000 ET 100000>
+L70EF:  .byte $00, $04, $02, $02, $02, $02, $82
+
+SPNMSG:
+L70F6:  .word SPN1, SPN2, SPN3, SPN4
+L70FE:  .word SPN5, SPN6, SPN7, SPN8
+L7106:  .word SPN9, SPNA, SPNB, SPNC
+L710E:  .word SPND, SPNE, ZERMSG, SPN10
+L7116:  .word FR11, FR12, FR13, SPN14
+L711E:  .word SPN15, SPN16, SPN17, CPYMSG
+
+SPN1:
+L7126:  .byte $85, $4A, $1E, $30, $1E, $2E, $26, $22 ;ASCVL -123.,74.,<ENEMIGO MUY >
+L712E:  .byte $32, $00, $2E, $3E, $46, $80
+
+SPN2:
+L7134:  .byte $00, $00, $16, $00, $2C, $16, $00, $26 ;ASCVL 0,0,<A LA IZQUIERDA>
+L713C:  .byte $48, $36, $3E, $26, $1E, $38, $1C, $96
+
+SPN3:
+L7144:  .byte $00, $00, $16, $00, $2C, $16, $00, $1C ;ASCVL 0,0,<A LA DERECHA>
+L714C:  .byte $1E, $38, $1E, $1A, $24, $96
+
+SPN4:
+L7152:  .byte $00, $00, $16, $3C, $38, $16, $BA ;ASCVL 0,0,<ATRAS>
+
+SPN5:
+L7159:  .byte $02, $1A, $22, $38, $16, $18, $1E, $00 ;ASCVL 2.,26.,<GRABE SUS INICIALES>
+L7161:  .byte $3A, $3E, $3A, $00, $26, $30, $26, $1A
+L7169:  .byte $26, $16, $2C, $1E, $BA
+
+SPN6:
+L716E:  .byte $C2, $10, $3A, $1E, $2C, $1E, $1A, $1A ;ASCVL -62.,16.,<SELECCIONE LETRA CON CONTROL DERECHO>
+L7176:  .byte $26, $32, $30, $1E, $00, $2C, $1E, $3C
+L717E:  .byte $38, $16, $00, $1A, $32, $30, $00, $1A
+L7186:  .byte $32, $30, $3C, $38, $32, $2C, $00, $1C
+L718E:  .byte $1E, $38, $1E, $1A, $24, $B2
+
+SPN7:
+L7194:  .byte $C9, $08, $22, $38, $16, $18, $1E, $2C ;ASCVL -55.,8.,<GRABELA CON EL BOTON DE DISPARO>
+L719C:  .byte $16, $00, $1A, $32, $30, $00, $1E, $2C
+L71A4:  .byte $00, $18, $32, $3C, $32, $30, $00, $1C
+L71AC:  .byte $1E, $00, $1C, $26, $3A, $34, $16, $38
+L71B4:  .byte $B2
+
+SPN8:
+L71B5:  .byte $20, $46, $34, $3E, $30, $3C, $32, $3A ;ASCVL 32.,70.,<PUNTOS MAYORES 000>
+L71BD:  .byte $00, $2E, $16, $46, $32, $38, $1E, $3A
+L71C5:  .byte $00, $00, $00, $00, $00, $02, $02, $82
+
+SPN9:
+L71CD:  .byte $85, $5A, $1E, $30, $1E, $2E, $26, $22 ;ASCVL -123.,90.,<ENEMIGO EN RANGO>
+L71D5:  .byte $32, $00, $1E, $30, $00, $38, $16, $30
+L71DD:  .byte $22, $B2
+
+SPNA:
+L71DF:  .byte $85, $52, $2E, $32, $40, $26, $2E, $26 ;ASCVL -123.,82.,<MOVIMIENTO BLOQUEADO POR OBJETO>
+L71E7:  .byte $1E, $30, $3C, $32, $00, $18, $2C, $32
+L71EF:  .byte $36, $3E, $1E, $16, $1C, $32, $00, $34
+L71F7:  .byte $32, $38, $00, $32, $18, $28, $1E, $3C
+L71FF:  .byte $B2
+
+SPNB:
+L7200:  .byte $D8, $18, $28, $3E, $1E, $22, $32, $00 ;ASCVL -40.,24.,<JUEGO TERMINADO>
+L7208:  .byte $3C, $1E, $38, $2E, $26, $30, $16, $1C
+L7210:  .byte $B2
+
+SPNC:
+L7211:  .byte $DE, $00, $34, $3E, $2C, $3A, $16, $38 ;ASCVL -34.,0.,<PULSAR START>
+L7219:  .byte $00, $3A, $3C, $16, $38, $BC
+
+SPND:
+L721F:  .byte $20, $50, $34, $3E, $30, $3C, $32, $3A ;ASCVL 32.,80.,<PUNTOS 000>
+L7227:  .byte $00, $00, $00, $00, $00, $02, $02, $82
+
+SPNE:
+L722F:  .byte $F2, $28, $38, $1E, $1A, $32, $38, $1C ;ASCVL -14.,40.,<RECORDS>
+L7237:  .byte $BA
+
+SPN10:
+L7238:  .byte $A8, $18, $34, $3E, $30, $3C, $32, $3A ;ASCVL -88.,24.,<PUNTOS GRANDES>
+L7240:  .byte $00, $22, $38, $16, $30, $1C, $1E, $BA
+
+SPN14:
+L7248:  .byte $C6, $00, $00, $00, $20, $26, $1A, $24 ;ASCVL -58.,0,< FICHA JEUGO>
+L7250:  .byte $16, $00, $00, $00, $00, $00, $28, $1E
+L7258:  .byte $3E, $22, $B2
+
+SPN15:
+L725B:  .byte $D8, $EA, $26, $30, $3A, $1E, $38, $3C ;ASCVL -40.,-22.,<INSERTE FICHAS>
+L7263:  .byte $1E, $00, $20, $26, $1A, $24, $16, $BA
+
+SPN16:
+L726B:  .byte $B2, $BA, $40, $26, $1C, $16, $00, $1E ;ASCVL -78.,-70.,<VIDA EXTRA A >
+L7273:  .byte $44, $3C, $38, $16, $00, $16, $80
+
+SPN17:
+L727A:  .byte $00, $00, $02, $02, $02, $00, $46, $00 ;ASCVL 0,0,<000 Y 100000>
+L7282:  .byte $04, $02, $02, $02, $02, $82
+
+GRMMSG:
+L7288:  .word GRM1, GRM2, GRM3, GRM4
+L7290:  .word GRM5, GRM6, GRM7, GRM8
+L7298:  .word GRM9, GRMA, GRMB, GRMC
+L72A0:  .word GRMD, GRME, ZERMSG, GRM10
+L72A8:  .word GRM11, GRM12, GRM13, GRM14
+L72B0:  .word GRM15, GRM16, GRM17, CPYMSG
+
+GRM1:
+L72B8:  .byte $85, $4A, $22, $1E, $22, $30, $1E, $38 ;ASCVL -123.,74.,<GEGNER VON >
+L72C0:  .byte $00, $40, $32, $30, $80
+
+GRM2:
+L72C5:  .byte $00, $00, $2C, $26, $30, $2A, $BA ;ASCVL 0,0,<LINKS>
+
+GRM3:
+L72CC:  .byte $00, $00, $38, $1E, $1A, $24, $3C, $BA ;ASCVL 0,0,<RECHTS>
+
+GRM4:
+L72D4:  .byte $00, $00, $24, $26, $30, $3C, $1E, $B0 ;ASCVL 0,0,<HINTEN>
+
+GRM5:
+L72DC:  .byte $20, $1A, $22, $1E, $18, $1E, $30, $00 ;ASCVL 32.,26.,<GEBEN SIE IHRE INITIALEN EIN>
+L72E4:  .byte $3A, $26, $1E, $00, $26, $24, $38, $1E
+L72EC:  .byte $00, $26, $30, $26, $3C, $26, $16, $2C
+L72F4:  .byte $1E, $30, $00, $1E, $26, $B0
+
+GRM6:
+L72FA:  .byte $B2, $10, $42, $16, $1E, $24, $2C, $1E ;ASCVL -78.,16.,<WAEHLEN SIE DEN BUCHSTABEN MIT DEM RECHTEN STEUERGRIFF>
+L7302:  .byte $30, $00, $3A, $26, $1E, $00, $1C, $1E
+L730A:  .byte $30, $00, $18, $3E, $1A, $24, $3A, $3C
+L7312:  .byte $16, $18, $1E, $30, $00, $2E, $26, $3C
+L731A:  .byte $00, $1C, $1E, $2E, $00, $38, $1E, $1A
+L7322:  .byte $24, $3C, $1E, $30, $00, $3A, $3C, $1E
+L732A:  .byte $3E, $1E, $38, $22, $38, $26, $20, $A0
+
+GRM7:
+L7332:  .byte $C4, $08, $22, $1E, $18, $1E, $30, $00 ;ASCVL -60.,8.,<GEBEN SIE DEN BUCHSTABEN MIT DEM FEUERKNOPF EIN>
+L733A:  .byte $3A, $26, $1E, $00, $1C, $1E, $30, $00
+L7342:  .byte $18, $3E, $1A, $24, $3A, $3C, $16, $18
+L734A:  .byte $1E, $30, $00, $2E, $26, $3C, $00, $1C
+L7352:  .byte $1E, $2E, $00, $20, $1E, $3E, $1E, $38
+L735A:  .byte $2A, $30, $32, $34, $20, $00, $1E, $26
+L7362:  .byte $B0
+
+GRM8:
+L7363:  .byte $20, $46, $18, $1E, $3A, $3C, $1E, $00 ;ASCVL 32.,70.,<BESTE PUNKTZAHL 000>
+L736B:  .byte $34, $3E, $30, $2A, $3C, $48, $16, $24
+L7373:  .byte $2C, $00, $00, $00, $00, $00, $00, $02
+L737B:  .byte $02, $82
+
+GRM9:
+L737D:  .byte $85, $5A, $22, $1E, $22, $30, $1E, $38 ;ASCVL -123.,90.,<GEGNER IM FEUERBEREICH>
+L7385:  .byte $00, $26, $2E, $00, $20, $1E, $3E, $1E
+L738D:  .byte $38, $18, $1E, $38, $1E, $26, $1A, $A4
+
+GRMA:
+L7395:  .byte $85, $52, $18, $1E, $42, $1E, $22, $3E ;ASCVL -123.,82.,<BEWEGUNG BLOCKIERT>
+L739D:  .byte $30, $22, $00, $18, $2C, $32, $1A, $2A
+L73A5:  .byte $26, $1E, $38, $BC
+
+GRMB:
+L73A9:  .byte $E4, $18, $3A, $34, $26, $1E, $2C, $1E ;ASCVL -28.,24.,<SPIELENDE>
+L73B1:  .byte $30, $1C, $9E
+
+GRMC:
+L73B4:  .byte $C6, $00, $3A, $3C, $16, $38, $3C, $2A ;ASCVL -58.,0.,<STARTKNOPF DRUECKEN>
+L73BC:  .byte $30, $32, $34, $20, $00, $1C, $38, $3E
+L73C4:  .byte $1E, $1A, $2A, $1E, $B0
+
+GRMD:
+L73C9:  .byte $20, $50, $34, $3E, $30, $2A, $3C, $48 ;ASCVL 32.,80.,<PUNKTZAHL 000>
+L73D1:  .byte $16, $24, $2C, $00, $00, $00, $00, $02
+L73D9:  .byte $02, $82
+
+GRME:
+L73DB:  .byte $D6, $28, $24, $32, $1E, $1A, $24, $3A ;ASCVL -42.,40.,<HOECHSTERGEBNISSE>
+L73E3:  .byte $3C, $1E, $38, $22, $1E, $18, $30, $26
+L73EB:  .byte $3A, $3A, $9E
+
+GRM10:
+L73EE:  .byte $98, $18, $22, $38, $32, $3A, $3A, $16 ;ASCVL -104.,24.,<GROSSARTIGES ERGEBNIS>
+L73F6:  .byte $38, $3C, $26, $22, $1E, $3A, $00, $1E
+L73FE:  .byte $38, $22, $1E, $18, $30, $26, $BA
+
+GRM11:
+L7405:  .byte $CA, $00, $04, $00, $00, $00, $00, $00 ;ASCVL -54.,0,<1 2 E>
+L740D:  .byte $00, $00, $00, $00, $06, $00, $00, $00
+L7415:  .byte $00, $00, $00, $9E
+
+GRM12:
+L7419:  .byte $CA, $00, $04, $00, $00, $00, $00, $00 ;ASCVL -54.,0,<1 1>
+L7421:  .byte $00, $00, $00, $00, $84
+
+GRM13:
+L7426:  .byte $CA, $00, $06, $00, $00, $00, $00, $00 ;ASCVL -54.,0,<2 N 1>
+L742E:  .byte $00, $00, $30, $00, $84
+
+GRM14:
+L7433:  .byte $CA, $00, $00, $00, $2E, $3E, $1E, $30 ;ASCVL -54.,0,< MUENZE SPIEL>
+L743B:  .byte $48, $1E, $00, $00, $00, $00, $3A, $34
+L7443:  .byte $26, $1E, $AC
+
+GRM15:
+L7446:  .byte $D8, $EA, $22, $1E, $2C, $1C, $00, $1E ;ASCVL -40.,-22.,<GELD EINWERFEN>
+L744E:  .byte $26, $30, $42, $1E, $38, $20, $1E, $B0
+
+GRM16:
+L7456:  .byte $B7, $BA, $18, $32, $30, $3E, $3A, $00 ;ASCVL -73.,-70.,<BONUS BEI >
+L745E:  .byte $18, $1E, $26, $80
+
+GRM17:
+L7462:  .byte $00, $00, $02, $02, $02, $00, $3E, $30 ;ASCVL 0,0,<000 UND 100000>
+L746A:  .byte $1C, $00, $04, $02, $02, $02, $02, $82
+
+OBJTBL:
+L7472:  .word PYROBJ, CUBOBJ, TNKOBJ, SHLOBJ
+L747A:  .word TREADS                ;.REPT 8
+L747C:  .word TREADS
+L747E:  .word TREADS
+L7480:  .word TREADS
+L7482:  .word TREADS
+L7484:  .word TREADS
+L7486:  .word TREADS
+L7488:  .word TREADS
+L748A:  .word PYROBJ, RDROBJ, EXPOBJ, CUBOBJ
+L7492:  .word EX1OBJ, EX2OBJ, EX0OBJ, RDROBJ
+L749A:  .word EX2OBJ, EX1OBJ, R2DOBJ, BT0OBJ
+L74A2:  .word EX2OBJ, EX4OBJ, EX1OBJ, EX3OBJ
+L74AA:  .word EX1OBJ, EX4OBJ, BT1OBJ, BT2OBJ
+L74B2:  .word SAUOBJ, TR7OBJ, $0000, $0000
+L74BA:  .word EXHOBJ                ;.REPT 8
+L74BC:  .word EXHOBJ
+L74BE:  .word EXHOBJ
+L74C0:  .word EXHOBJ
+L74C2:  .word EXHOBJ
+L74C4:  .word EXHOBJ
+L74C6:  .word EXHOBJ
+L74C8:  .word EXHOBJ
+
+CHKS6:
+L74CA:  .byte $DD
+
+PYROBJ:
+L74CB:  .byte $03                   ;TLABS 0
+L74CC:  .byte $A1                   ;SBRITE 0A0
+L74CD:  .byte $24                   ;TVCTR 4
+L74CE:  .byte $0C                   ;TVCTR 1
+L74CF:  .byte $04                   ;TVCTR 0
+L74D0:  .byte $1C                   ;TVCTR 3
+L74D1:  .byte $24                   ;TVCTR 4
+L74D2:  .byte $14                   ;TVCTR 2
+L74D3:  .byte $1C                   ;TVCTR 3
+L74D4:  .byte $12                   ;BVCTR 2
+L74D5:  .byte $0C                   ;TVCTR 1
+L74D6:  .byte $FF                   ;OBJEND
+
+CUBOBJ:
+L74D7:  .byte $03                   ;TLABS 0
+L74D8:  .byte $A1                   ;SBRITE 0A0
+L74D9:  .byte $0C                   ;TVCTR 1
+L74DA:  .byte $14                   ;TVCTR 2
+L74DB:  .byte $1C                   ;TVCTR 3
+L74DC:  .byte $04                   ;TVCTR 0
+L74DD:  .byte $24                   ;TVCTR 4
+L74DE:  .byte $2C                   ;TVCTR 5
+L74DF:  .byte $34                   ;TVCTR 6
+L74E0:  .byte $3C                   ;TVCTR 7
+L74E1:  .byte $24                   ;TVCTR 4
+L74E2:  .byte $2A                   ;BVCTR 5
+L74E3:  .byte $0C                   ;TVCTR 1
+L74E4:  .byte $12                   ;BVCTR 2
+L74E5:  .byte $34                   ;TVCTR 6
+L74E6:  .byte $3A                   ;BVCTR 7
+L74E7:  .byte $1C                   ;TVCTR 3
+L74E8:  .byte $FF                   ;OBJEND
+
+TNKOBJ:
+L74E9:  .byte $BB                   ;TLABS 17
+L74EA:  .byte $A1                   ;SBRITE 0A0
+L74EB:  .byte $B4                   ;TVCTR 16
+L74EC:  .byte $62                   ;BVCTR 0C
+L74ED:  .byte $6C                   ;TVCTR 0D
+L74EE:  .byte $72                   ;BVCTR 0E
+L74EF:  .byte $A4                   ;TVCTR 14
+L74F0:  .byte $94                   ;TVCTR 12
+L74F1:  .byte $7C                   ;TVCTR 0F
+L74F2:  .byte $74                   ;TVCTR 0E
+L74F3:  .byte $8C                   ;TVCTR 11
+L74F4:  .byte $84                   ;TVCTR 10
+L74F5:  .byte $9C                   ;TVCTR 13
+L74F6:  .byte $AC                   ;TVCTR 15
+L74F7:  .byte $8C                   ;TVCTR 11
+L74F8:  .byte $7A                   ;BVCTR 0F
+L74F9:  .byte $84                   ;TVCTR 10
+L74FA:  .byte $9A                   ;BVCTR 13
+L74FB:  .byte $94                   ;TVCTR 12
+L74FC:  .byte $A2                   ;BVCTR 14
+L74FD:  .byte $AC                   ;TVCTR 15
+L74FE:  .byte $1B                   ;TLABS 3
+L74FF:  .byte $04                   ;TVCTR 0
+L7500:  .byte $24                   ;TVCTR 4
+L7501:  .byte $3C                   ;TVCTR 7
+L7502:  .byte $34                   ;TVCTR 6
+L7503:  .byte $14                   ;TVCTR 2
+L7504:  .byte $1C                   ;TVCTR 3
+L7505:  .byte $3C                   ;TVCTR 7
+L7506:  .byte $5C                   ;TVCTR 0B
+L7507:  .byte $54                   ;TVCTR 0A
+L7508:  .byte $34                   ;TVCTR 6
+L7509:  .byte $2C                   ;TVCTR 5
+L750A:  .byte $4C                   ;TVCTR 9
+L750B:  .byte $54                   ;TVCTR 0A
+L750C:  .byte $6C                   ;TVCTR 0D
+L750D:  .byte $4C                   ;TVCTR 9
+L750E:  .byte $44                   ;TVCTR 8
+L750F:  .byte $5C                   ;TVCTR 0B
+L7510:  .byte $64                   ;TVCTR 0C
+L7511:  .byte $44                   ;TVCTR 8
+L7512:  .byte $24                   ;TVCTR 4
+L7513:  .byte $2C                   ;TVCTR 5
+L7514:  .byte $0C                   ;TVCTR 1
+L7515:  .byte $14                   ;TVCTR 2
+L7516:  .byte $0A                   ;BVCTR 1
+L7517:  .byte $04                   ;TVCTR 0
+L7518:  .byte $FF                   ;OBJEND
+
+SHLOBJ:
+L7519:  .byte $03                   ;TLABS 0
+L751A:  .byte $E1                   ;SBRITE 0E0
+L751B:  .byte $24                   ;TVCTR 4
+L751C:  .byte $0C                   ;TVCTR 1
+L751D:  .byte $04                   ;TVCTR 0
+L751E:  .byte $1C                   ;TVCTR 3
+L751F:  .byte $24                   ;TVCTR 4
+L7520:  .byte $14                   ;TVCTR 2
+L7521:  .byte $1C                   ;TVCTR 3
+L7522:  .byte $12                   ;BVCTR 2
+L7523:  .byte $0C                   ;TVCTR 1
+L7524:  .byte $FF                   ;OBJEND
+
+TREADS:
+L7525:  .byte $03                   ;TLABS 0
+L7526:  .byte $81                   ;SBRITE 80
+L7527:  .byte $0C                   ;TVCTR 1
+L7528:  .byte $12                   ;BVCTR 2
+L7529:  .byte $1C                   ;TVCTR 3
+L752A:  .byte $22                   ;BVCTR 4
+L752B:  .byte $2C                   ;TVCTR 5
+L752C:  .byte $FF                   ;OBJEND
+
+RDROBJ:
+L752D:  .byte $03                   ;TLABS 0
+L752E:  .byte $A1                   ;SBRITE 0A0
+L752F:  .byte $0C                   ;TVCTR 1
+L7530:  .byte $14                   ;TVCTR 2
+L7531:  .byte $1C                   ;TVCTR 3
+L7532:  .byte $04                   ;TVCTR 0
+L7533:  .byte $24                   ;TVCTR 4
+L7534:  .byte $2C                   ;TVCTR 5
+L7535:  .byte $34                   ;TVCTR 6
+L7536:  .byte $3C                   ;TVCTR 7
+L7537:  .byte $24                   ;TVCTR 4
+L7538:  .byte $3A                   ;BVCTR 7
+L7539:  .byte $1C                   ;TVCTR 3
+L753A:  .byte $FF                   ;OBJEND
+
+EXPOBJ:
+L753B:  .byte $03                   ;TLABS 0
+L753C:  .byte $05                   ;TSPCL
+L753D:  .byte $FF                   ;OBJEND
+
+EX0OBJ:
+L753E:  .byte $03                   ;TLABS 0
+L753F:  .byte $A1                   ;SBRITE 0A0
+L7540:  .byte $0C                   ;TVCTR 1
+L7541:  .byte $14                   ;TVCTR 2
+L7542:  .byte $1C                   ;TVCTR 3
+L7543:  .byte $04                   ;TVCTR 0
+L7544:  .byte $24                   ;TVCTR 4
+L7545:  .byte $2C                   ;TVCTR 5
+L7546:  .byte $0C                   ;TVCTR 1
+L7547:  .byte $2A                   ;BVCTR 5
+L7548:  .byte $14                   ;TVCTR 2
+L7549:  .byte $1A                   ;BVCTR 3
+L754A:  .byte $24                   ;TVCTR 4
+L754B:  .byte $32                   ;BVCTR 6
+L754C:  .byte $64                   ;TVCTR 0C
+L754D:  .byte $54                   ;TVCTR 0A
+L754E:  .byte $3C                   ;TVCTR 7
+L754F:  .byte $34                   ;TVCTR 6
+L7550:  .byte $4C                   ;TVCTR 9
+L7551:  .byte $44                   ;TVCTR 8
+L7552:  .byte $5C                   ;TVCTR 0B
+L7553:  .byte $6C                   ;TVCTR 0D
+L7554:  .byte $4C                   ;TVCTR 9
+L7555:  .byte $3A                   ;BVCTR 7
+L7556:  .byte $44                   ;TVCTR 8
+L7557:  .byte $5A                   ;BVCTR 0B
+L7558:  .byte $54                   ;TVCTR 0A
+L7559:  .byte $62                   ;BVCTR 0C
+L755A:  .byte $6C                   ;TVCTR 0D
+L755B:  .byte $FF                   ;OBJEND
+
+EX1OBJ:
+L755C:  .byte $03                   ;TLABS 0
+L755D:  .byte $A1                   ;SBRITE 0A0
+L755E:  .byte $1C                   ;TVCTR 3
+L755F:  .byte $2C                   ;TVCTR 5
+L7560:  .byte $14                   ;TVCTR 2
+L7561:  .byte $04                   ;TVCTR 0
+L7562:  .byte $0C                   ;TVCTR 1
+L7563:  .byte $14                   ;TVCTR 2
+L7564:  .byte $2C                   ;TVCTR 5
+L7565:  .byte $24                   ;TVCTR 4
+L7566:  .byte $0C                   ;TVCTR 1
+L7567:  .byte $22                   ;BVCTR 4
+L7568:  .byte $1C                   ;TVCTR 3
+L7569:  .byte $FF                   ;OBJEND
+
+EX2OBJ:
+L756A:  .byte $03                   ;TLABS 0
+L756B:  .byte $A1                   ;SBRITE 0A0
+L756C:  .byte $0C                   ;TVCTR 1
+L756D:  .byte $14                   ;TVCTR 2
+L756E:  .byte $1C                   ;TVCTR 3
+L756F:  .byte $04                   ;TVCTR 0
+L7570:  .byte $24                   ;TVCTR 4
+L7571:  .byte $34                   ;TVCTR 6
+L7572:  .byte $3C                   ;TVCTR 7
+L7573:  .byte $2C                   ;TVCTR 5
+L7574:  .byte $24                   ;TVCTR 4
+L7575:  .byte $2A                   ;BVCTR 5
+L7576:  .byte $0C                   ;TVCTR 1
+L7577:  .byte $3A                   ;BVCTR 7
+L7578:  .byte $14                   ;TVCTR 2
+L7579:  .byte $1A                   ;BVCTR 3
+L757A:  .byte $34                   ;TVCTR 6
+L757B:  .byte $FF                   ;OBJEND
+
+R2DOBJ:
+L757C:  .byte $6B                   ;TLABS 0D
+L757D:  .byte $A1                   ;SBRITE 0A0
+L757E:  .byte $64                   ;TVCTR 0C
+L757F:  .byte $34                   ;TVCTR 6
+L7580:  .byte $04                   ;TVCTR 0
+L7581:  .byte $0C                   ;TVCTR 1
+L7582:  .byte $3C                   ;TVCTR 7
+L7583:  .byte $44                   ;TVCTR 8
+L7584:  .byte $4C                   ;TVCTR 9
+L7585:  .byte $54                   ;TVCTR 0A
+L7586:  .byte $5C                   ;TVCTR 0B
+L7587:  .byte $34                   ;TVCTR 6
+L7588:  .byte $3C                   ;TVCTR 7
+L7589:  .byte $64                   ;TVCTR 0C
+L758A:  .byte $44                   ;TVCTR 8
+L758B:  .byte $14                   ;TVCTR 2
+L758C:  .byte $1C                   ;TVCTR 3
+L758D:  .byte $4C                   ;TVCTR 9
+L758E:  .byte $64                   ;TVCTR 0C
+L758F:  .byte $54                   ;TVCTR 0A
+L7590:  .byte $24                   ;TVCTR 4
+L7591:  .byte $2C                   ;TVCTR 5
+L7592:  .byte $5C                   ;TVCTR 0B
+L7593:  .byte $64                   ;TVCTR 0C
+L7594:  .byte $C3                   ;TLABS 18
+L7595:  .byte $E1                   ;SBRITE 0E0
+L7596:  .byte $BC                   ;TVCTR 17
+L7597:  .byte $B4                   ;TVCTR 16
+L7598:  .byte $C4                   ;TVCTR 18
+L7599:  .byte $CC                   ;TVCTR 19
+L759A:  .byte $BC                   ;TVCTR 17
+L759B:  .byte $CA                   ;BVCTR 19
+L759C:  .byte $B4                   ;TVCTR 16
+L759D:  .byte $0A                   ;BVCTR 1
+L759E:  .byte $A1                   ;SBRITE 0A0
+L759F:  .byte $14                   ;TVCTR 2
+L75A0:  .byte $1A                   ;BVCTR 3
+L75A1:  .byte $24                   ;TVCTR 4
+L75A2:  .byte $2A                   ;BVCTR 5
+L75A3:  .byte $04                   ;TVCTR 0
+L75A4:  .byte $93                   ;TLABS 12
+L75A5:  .byte $9C                   ;TVCTR 13
+L75A6:  .byte $A4                   ;TVCTR 14
+L75A7:  .byte $AC                   ;TVCTR 15
+L75A8:  .byte $94                   ;TVCTR 12
+L75A9:  .byte $74                   ;TVCTR 0E
+L75AA:  .byte $7C                   ;TVCTR 0F
+L75AB:  .byte $84                   ;TVCTR 10
+L75AC:  .byte $8C                   ;TVCTR 11
+L75AD:  .byte $74                   ;TVCTR 0E
+L75AE:  .byte $7A                   ;BVCTR 0F
+L75AF:  .byte $9C                   ;TVCTR 13
+L75B0:  .byte $A2                   ;BVCTR 14
+L75B1:  .byte $84                   ;TVCTR 10
+L75B2:  .byte $8A                   ;BVCTR 11
+L75B3:  .byte $AC                   ;TVCTR 15
+L75B4:  .byte $FF                   ;OBJEND
+
+SAUOBJ:
+L75B5:  .byte $83                   ;TLABS 10
+L75B6:  .byte $A1                   ;SBRITE 0A0
+L75B7:  .byte $44                   ;TVCTR 8
+L75B8:  .byte $4C                   ;TVCTR 9
+L75B9:  .byte $84                   ;TVCTR 10
+L75BA:  .byte $54                   ;TVCTR 0A
+L75BB:  .byte $5C                   ;TVCTR 0B
+L75BC:  .byte $84                   ;TVCTR 10
+L75BD:  .byte $64                   ;TVCTR 0C
+L75BE:  .byte $6C                   ;TVCTR 0D
+L75BF:  .byte $84                   ;TVCTR 10
+L75C0:  .byte $74                   ;TVCTR 0E
+L75C1:  .byte $7C                   ;TVCTR 0F
+L75C2:  .byte $84                   ;TVCTR 10
+L75C3:  .byte $03                   ;TLABS 0
+L75C4:  .byte $3C                   ;TVCTR 7
+L75C5:  .byte $7C                   ;TVCTR 0F
+L75C6:  .byte $44                   ;TVCTR 8
+L75C7:  .byte $04                   ;TVCTR 0
+L75C8:  .byte $0C                   ;TVCTR 1
+L75C9:  .byte $4C                   ;TVCTR 9
+L75CA:  .byte $54                   ;TVCTR 0A
+L75CB:  .byte $14                   ;TVCTR 2
+L75CC:  .byte $1C                   ;TVCTR 3
+L75CD:  .byte $5C                   ;TVCTR 0B
+L75CE:  .byte $64                   ;TVCTR 0C
+L75CF:  .byte $24                   ;TVCTR 4
+L75D0:  .byte $2C                   ;TVCTR 5
+L75D1:  .byte $6C                   ;TVCTR 0D
+L75D2:  .byte $74                   ;TVCTR 0E
+L75D3:  .byte $34                   ;TVCTR 6
+L75D4:  .byte $3C                   ;TVCTR 7
+L75D5:  .byte $32                   ;BVCTR 6
+L75D6:  .byte $2C                   ;TVCTR 5
+L75D7:  .byte $22                   ;BVCTR 4
+L75D8:  .byte $1C                   ;TVCTR 3
+L75D9:  .byte $12                   ;BVCTR 2
+L75DA:  .byte $0C                   ;TVCTR 1
+L75DB:  .byte $FF                   ;OBJEND
+
+EX3OBJ:
+L75DC:  .byte $03                   ;TLABS 0
+L75DD:  .byte $A1                   ;SBRITE 0A0
+L75DE:  .byte $14                   ;TVCTR 2
+L75DF:  .byte $0C                   ;TVCTR 1
+L75E0:  .byte $1C                   ;TVCTR 3
+L75E1:  .byte $04                   ;TVCTR 0
+L75E2:  .byte $0C                   ;TVCTR 1
+L75E3:  .byte $12                   ;BVCTR 2
+L75E4:  .byte $1C                   ;TVCTR 3
+L75E5:  .byte $FF                   ;OBJEND
+
+EX4OBJ:
+L75E6:  .byte $0B                   ;TLABS 1
+L75E7:  .byte $A1                   ;SBRITE 0A0
+L75E8:  .byte $14                   ;TVCTR 2
+L75E9:  .byte $1C                   ;TVCTR 3
+L75EA:  .byte $3C                   ;TVCTR 7
+L75EB:  .byte $34                   ;TVCTR 6
+L75EC:  .byte $2C                   ;TVCTR 5
+L75ED:  .byte $24                   ;TVCTR 4
+L75EE:  .byte $04                   ;TVCTR 0
+L75EF:  .byte $0C                   ;TVCTR 1
+L75F0:  .byte $2C                   ;TVCTR 5
+L75F1:  .byte $32                   ;BVCTR 6
+L75F2:  .byte $14                   ;TVCTR 2
+L75F3:  .byte $FF                   ;OBJEND
+
+EXHOBJ:
+L75F4:  .byte $3B                   ;TLABS 7
+L75F5:  .byte $A1                   ;SBRITE 0A0
+L75F6:  .byte $00                   ;TDOT 0
+L75F7:  .byte $08                   ;TDOT 1
+L75F8:  .byte $10                   ;TDOT 2
+L75F9:  .byte $18                   ;TDOT 3
+L75FA:  .byte $20                   ;TDOT 4
+L75FB:  .byte $28                   ;TDOT 5
+L75FC:  .byte $30                   ;TDOT 6
+L75FD:  .byte $38                   ;TDOT 7
+L75FE:  .byte $FF                   ;OBJEND
+
+TR7OBJ:
+L75FF:  .byte $03                   ;TLABS 0
+L7600:  .byte $A1                   ;SBRITE 0A0
+L7601:  .byte $0C                   ;TVCTR 1
+L7602:  .byte $24                   ;TVCTR 4
+L7603:  .byte $04                   ;TVCTR 0
+L7604:  .byte $1C                   ;TVCTR 3
+L7605:  .byte $14                   ;TVCTR 2
+L7606:  .byte $2C                   ;TVCTR 5
+L7607:  .byte $1C                   ;TVCTR 3
+L7608:  .byte $12                   ;BVCTR 2
+L7609:  .byte $0C                   ;TVCTR 1
+L760A:  .byte $22                   ;BVCTR 4
+L760B:  .byte $2C                   ;TVCTR 5
+L760C:  .byte $4B                   ;TLABS 9
+L760D:  .byte $54                   ;TVCTR 0A
+L760E:  .byte $34                   ;TVCTR 6
+L760F:  .byte $74                   ;TVCTR 0E
+L7610:  .byte $6C                   ;TVCTR 0D
+L7611:  .byte $4C                   ;TVCTR 9
+L7612:  .byte $44                   ;TVCTR 8
+L7613:  .byte $3C                   ;TVCTR 7
+L7614:  .byte $34                   ;TVCTR 6
+L7615:  .byte $5C                   ;TVCTR 0B
+L7616:  .byte $64                   ;TVCTR 0C
+L7617:  .byte $44                   ;TVCTR 8
+L7618:  .byte $62                   ;BVCTR 0C
+L7619:  .byte $6C                   ;TVCTR 0D
+L761A:  .byte $72                   ;BVCTR 0E
+L761B:  .byte $5C                   ;TVCTR 0B
+L761C:  .byte $9B                   ;TLABS 13
+L761D:  .byte $B4                   ;TVCTR 16
+L761E:  .byte $AC                   ;TVCTR 15
+L761F:  .byte $A4                   ;TVCTR 14
+L7620:  .byte $84                   ;TVCTR 10
+L7621:  .byte $7C                   ;TVCTR 0F
+L7622:  .byte $94                   ;TVCTR 12
+L7623:  .byte $8C                   ;TVCTR 11
+L7624:  .byte $84                   ;TVCTR 10
+L7625:  .byte $7A                   ;BVCTR 0F
+L7626:  .byte $9C                   ;TVCTR 13
+L7627:  .byte $B2                   ;BVCTR 16
+L7628:  .byte $94                   ;TVCTR 12
+L7629:  .byte $8A                   ;BVCTR 11
+L762A:  .byte $AC                   ;TVCTR 15
+L762B:  .byte $BA                   ;BVCTR 17
+L762C:  .byte $E1                   ;SBRITE 0E0
+L762D:  .byte $C4                   ;TVCTR 18
+L762E:  .byte $FF                   ;OBJEND
+
+BT0OBJ:
+L762F:  .byte $03                   ;TLABS 0
+L7630:  .byte $F1                   ;SBRITE 0F0
+L7631:  .byte $0C                   ;TVCTR 1
+L7632:  .byte $14                   ;TVCTR 2
+L7633:  .byte $1C                   ;TVCTR 3
+L7634:  .byte $24                   ;TVCTR 4
+L7635:  .byte $2C                   ;TVCTR 5
+L7636:  .byte $34                   ;TVCTR 6
+L7637:  .byte $04                   ;TVCTR 0
+L7638:  .byte $3A                   ;BVCTR 7
+L7639:  .byte $44                   ;TVCTR 8
+L763A:  .byte $4C                   ;TVCTR 9
+L763B:  .byte $54                   ;TVCTR 0A
+L763C:  .byte $5C                   ;TVCTR 0B
+L763D:  .byte $3C                   ;TVCTR 7
+L763E:  .byte $62                   ;BVCTR 0C
+L763F:  .byte $6C                   ;TVCTR 0D
+L7640:  .byte $74                   ;TVCTR 0E
+L7641:  .byte $7C                   ;TVCTR 0F
+L7642:  .byte $64                   ;TVCTR 0C
+L7643:  .byte $82                   ;BVCTR 10
+L7644:  .byte $8C                   ;TVCTR 11
+L7645:  .byte $94                   ;TVCTR 12
+L7646:  .byte $9C                   ;TVCTR 13
+L7647:  .byte $84                   ;TVCTR 10
+L7648:  .byte $FF                   ;OBJEND
+
+BT1OBJ:
+L7649:  .byte $03                   ;TLABS 0
+L764A:  .byte $0C                   ;TVCTR 1
+L764B:  .byte $14                   ;TVCTR 2
+L764C:  .byte $1C                   ;TVCTR 3
+L764D:  .byte $24                   ;TVCTR 4
+L764E:  .byte $2C                   ;TVCTR 5
+L764F:  .byte $34                   ;TVCTR 6
+L7650:  .byte $3C                   ;TVCTR 7
+L7651:  .byte $44                   ;TVCTR 8
+L7652:  .byte $4C                   ;TVCTR 9
+L7653:  .byte $54                   ;TVCTR 0A
+L7654:  .byte $5C                   ;TVCTR 0B
+L7655:  .byte $64                   ;TVCTR 0C
+L7656:  .byte $6C                   ;TVCTR 0D
+L7657:  .byte $74                   ;TVCTR 0E
+L7658:  .byte $7C                   ;TVCTR 0F
+L7659:  .byte $3C                   ;TVCTR 7
+L765A:  .byte $84                   ;TVCTR 10
+L765B:  .byte $8C                   ;TVCTR 11
+L765C:  .byte $94                   ;TVCTR 12
+L765D:  .byte $9C                   ;TVCTR 13
+L765E:  .byte $A4                   ;TVCTR 14
+L765F:  .byte $04                   ;TVCTR 0
+L7660:  .byte $FF                   ;OBJEND
+
+BT2OBJ:
+L7661:  .byte $0B                   ;TLABS 1
+L7662:  .byte $04                   ;TVCTR 0
+L7663:  .byte $2C                   ;TVCTR 5
+L7664:  .byte $24                   ;TVCTR 4
+L7665:  .byte $1C                   ;TVCTR 3
+L7666:  .byte $14                   ;TVCTR 2
+L7667:  .byte $0C                   ;TVCTR 1
+L7668:  .byte $1C                   ;TVCTR 3
+L7669:  .byte $3C                   ;TVCTR 7
+L766A:  .byte $34                   ;TVCTR 6
+L766B:  .byte $0C                   ;TVCTR 1
+L766C:  .byte $4A                   ;BVCTR 9
+L766D:  .byte $44                   ;TVCTR 8
+L766E:  .byte $5C                   ;TVCTR 0B
+L766F:  .byte $54                   ;TVCTR 0A
+L7670:  .byte $4C                   ;TVCTR 9
+L7671:  .byte $72                   ;BVCTR 0E
+L7672:  .byte $B4                   ;TVCTR 16
+L7673:  .byte $BC                   ;TVCTR 17
+L7674:  .byte $C4                   ;TVCTR 18
+L7675:  .byte $64                   ;TVCTR 0C
+L7676:  .byte $6C                   ;TVCTR 0D
+L7677:  .byte $74                   ;TVCTR 0E
+L7678:  .byte $7C                   ;TVCTR 0F
+L7679:  .byte $84                   ;TVCTR 10
+L767A:  .byte $8C                   ;TVCTR 11
+L767B:  .byte $94                   ;TVCTR 12
+L767C:  .byte $9C                   ;TVCTR 13
+L767D:  .byte $A4                   ;TVCTR 14
+L767E:  .byte $AC                   ;TVCTR 15
+L767F:  .byte $B4                   ;TVCTR 16
+L7680:  .byte $FF                   ;OBJEND
+
+PTBLX1:
+L7681:  .word $2000                 ;.NWORD 800,0,0,1000
+L7683:  .word $0000
+L7685:  .word $0000
+L7687:  .word $4000
+L7689:  .word $8000                 ;.NWORD 2000,2000,2000,1000
+L768B:  .word $8000
+L768D:  .word $8000
+L768F:  .word $4000
+L7691:  .word $3000                 ;.NWORD 0C00,3000,3DC0,3200
+L7693:  .word $C000
+L7695:  .word $F700
+L7697:  .word $C800
+L7699:  .word $D800                 ;.NWORD 3600,2500,2600,3A00
+L769B:  .word $9400
+L769D:  .word $9800
+L769F:  .word $E800
+L76A1:  .word $7000                 ;.NWORD 1C00,1E00,1000,900
+L76A3:  .word $7800
+L76A5:  .word $4000
+L76A7:  .word $2400
+L76A9:  .word $2C00                 ;.NWORD 0B00
+
+PTBLY1:
+L76AB:  .word $2000                 ;.NWORD 800,1000,2000,2000
+L76AD:  .word $4000
+L76AF:  .word $8000
+L76B1:  .word $8000
+L76B3:  .word $8000                 ;.NWORD 2000,1000,0,0
+L76B5:  .word $4000
+L76B7:  .word $0000
+L76B9:  .word $0000
+L76BB:  .word $5000                 ;.NWORD 1400,600,1100,1000
+L76BD:  .word $1800
+L76BF:  .word $4400
+L76C1:  .word $4000
+L76C3:  .word $8C00                 ;.NWORD 2300,300,3A00,3900
+L76C5:  .word $0C00
+L76C7:  .word $E800
+L76C9:  .word $E400
+L76CB:  .word $9C00                 ;.NWORD 2700,3300,2D00,2F00
+L76CD:  .word $CC00
+L76CF:  .word $B400
+L76D1:  .word $BC00
+L76D3:  .word $F400                 ;.NWORD 3D00
+
+BATBL:
+L76D5:  .byte TLETBL-BATBL
+L76D6:  .word $00E0                 ;.MWORD 14,320,4
+L76D8:  .word $1400
+L76DA:  .word $0020
+L76DC:  .word $00E0                 ;.MWORD 14,240,4
+L76DE:  .word $0F00
+L76E0:  .word $0020
+L76E2:  .word $02A0                 ;.MWORD 42,200,11
+L76E4:  .word $0C80
+L76E6:  .word $0058
+L76E8:  .word $0460                 ;.MWORD 70,220,18
+L76EA:  .word $0DC0
+L76EC:  .word $0090
+L76EE:  .word $0640                 ;.MWORD 100,200,25
+L76F0:  .word $0C80
+L76F2:  .word $00C8
+L76F4:  .word $0800                 ;.MWORD 128,240,32
+L76F6:  .word $0F00
+L76F8:  .word $0100
+L76FA:  .word $0800                 ;.MWORD 128,320,32
+L76FC:  .word $1400
+L76FE:  .word $0100
+L7700:  .word $02A0                 ;.MWORD 42,280,11
+L7702:  .word $1180
+L7704:  .word $0058
+L7706:  .word $02A0                 ;.MWORD 42,260,11
+L7708:  .word $1040
+L770A:  .word $0058
+L770C:  .word $0460                 ;.MWORD 70,280,18
+L770E:  .word $1180
+L7710:  .word $0090
+L7712:  .word $0640                 ;.MWORD 100,260,25
+L7714:  .word $1040
+L7716:  .word $00C8
+L7718:  .word $0640                 ;.MWORD 100,280,25
+L771A:  .word $1180
+L771C:  .word $00C8
+L771E:  .word $00E0                 ;.MWORD 14,200,4
+L7720:  .word $0C80
+L7722:  .word $0020
+L7724:  .word $0020                 ;.MWORD 2,140,11
+L7726:  .word $08C0
+L7728:  .word $0058
+L772A:  .word $00E0                 ;.MWORD 14,80,4
+L772C:  .word $0500
+L772E:  .word $0020
+L7730:  .word $0800                 ;.MWORD 128,140,32
+L7732:  .word $08C0
+L7734:  .word $0100
+L7736:  .word $0380                 ;.MWORD 56,160,14
+L7738:  .word $0A00
+L773A:  .word $0070
+L773C:  .word $0400                 ;.MWORD 64,140,16
+L773E:  .word $08C0
+L7740:  .word $0080
+L7742:  .word $0380                 ;.MWORD 56,120,14
+L7744:  .word $0780
+L7746:  .word $0070
+L7748:  .word $0540                 ;.MWORD 84,140,21
+L774A:  .word $08C0
+L774C:  .word $00A8
+
+TLETBL:
+L774E:  .byte ZONTBL-TLETBL
+L774F:  .word $00E0                 ;.MWORD 14,40,4
+L7751:  .word $0280
+L7753:  .word $0020
+L7755:  .word $0640                 ;.MWORD 100,20,25
+L7757:  .word $0140
+L7759:  .word $00C8
+L775B:  .word $0640                 ;.MWORD 100,-40,25
+L775D:  .word $FD80
+L775F:  .word $00C8
+L7761:  .word $00E0                 ;.MWORD 14,-60,4
+L7763:  .word $FC40
+L7765:  .word $0020
+L7767:  .word $0640                 ;.MWORD 100,-80,25
+L7769:  .word $FB00
+L776B:  .word $00C8
+L776D:  .word $0640                 ;.MWORD 100,-140,25
+L776F:  .word $F740
+L7771:  .word $00C8
+L7773:  .word $00E0                 ;.MWORD 14,-140,4
+L7775:  .word $F740
+L7777:  .word $0020
+L7779:  .word $00E0                 ;.MWORD 14,-240,4
+L777B:  .word $F100
+L777D:  .word $0020
+L777F:  .word $01C0                 ;.MWORD 28,-340,7
+L7781:  .word $EAC0
+L7783:  .word $0038
+L7785:  .word $02A0                 ;.MWORD 42,-280,11
+L7787:  .word $EE80
+L7789:  .word $0058
+L778B:  .word $0380                 ;.MWORD 56,-280,14
+L778D:  .word $EE80
+L778F:  .word $0070
+L7791:  .word $0460                 ;.MWORD 70,-320,18
+L7793:  .word $EC00
+L7795:  .word $0090
+L7797:  .word $0540                 ;.MWORD 84,-280,21
+L7799:  .word $EE80
+L779B:  .word $00A8
+L779D:  .word $0640                 ;.MWORD 100,-280,25
+L779F:  .word $EE80
+L77A1:  .word $00C8
+L77A3:  .word $0720                 ;.MWORD 114,-340,28
+L77A5:  .word $EAC0
+L77A7:  .word $00E0
+L77A9:  .word $0800                 ;.MWORD 128,-240,32
+L77AB:  .word $F100
+L77AD:  .word $0100
+L77AF:  .word $02A0                 ;.MWORD 42,-180,11
+L77B1:  .word $F4C0
+L77B3:  .word $0058
+L77B5:  .word $0800                 ;.MWORD 128,-180,32
+L77B7:  .word $F4C0
+L77B9:  .word $0100
+L77BB:  .word $0800                 ;.MWORD 128,120,32
+L77BD:  .word $0780
+L77BF:  .word $0100
+L77C1:  .word $0640                 ;.MWORD 100,120,25
+L77C3:  .word $0780
+L77C5:  .word $00C8
+L77C7:  .word $0640                 ;.MWORD 100,60,25
+L77C9:  .word $03C0
+L77CB:  .word $00C8
+
+ZONTBL:
+L77CD:  .byte ENDZON-ZONTBL
+L77CE:  .word $F800                 ;.MWORD -128,300,-32
+L77D0:  .word $12C0
+L77D2:  .word $FF00
+L77D4:  .word $F800                 ;.MWORD -128,140,-32
+L77D6:  .word $08C0
+L77D8:  .word $FF00
+L77DA:  .word $F9C0                 ;.MWORD -100,220,-25
+L77DC:  .word $0DC0
+L77DE:  .word $FF38
+L77E0:  .word $FF20                 ;.MWORD -14,140,-4
+L77E2:  .word $08C0
+L77E4:  .word $FFE0
+L77E6:  .word $FF20                 ;.MWORD -14,300,-4
+L77E8:  .word $12C0
+L77EA:  .word $FFE0
+L77EC:  .word $FD60                 ;.MWORD -42,220,-11
+L77EE:  .word $0DC0
+L77F0:  .word $FFA8
+L77F2:  .word $F800                 ;.MWORD -128,20,-32
+L77F4:  .word $0140
+L77F6:  .word $FF00
+L77F8:  .word $FF20                 ;.MWORD -14,20,-4
+L77FA:  .word $0140
+L77FC:  .word $FFE0
+L77FE:  .word $F9C0                 ;.MWORD -100,100,-25
+L7800:  .word $0640
+L7802:  .word $FF38
+L7804:  .word $F9C0                 ;.MWORD -100,60,-25
+L7806:  .word $03C0
+L7808:  .word $FF38
+L780A:  .word $FD60                 ;.MWORD -42,60,-11
+L780C:  .word $03C0
+L780E:  .word $FFA8
+L7810:  .word $FD60                 ;.MWORD -42,100,-11
+L7812:  .word $0640
+L7814:  .word $FFA8
+L7816:  .word $F800                 ;.MWORD -128,0,-32
+L7818:  .word $0000
+L781A:  .word $FF00
+L781C:  .word $FBA0                 ;.MWORD -70,-40,-18
+L781E:  .word $FD80
+L7820:  .word $FF70
+L7822:  .word $F800                 ;.MWORD -128,-160,-32
+L7824:  .word $F600
+L7826:  .word $FF00
+L7828:  .word $F8E0                 ;.MWORD -114,-260,-28
+L782A:  .word $EFC0
+L782C:  .word $FF20
+L782E:  .word $F9C0                 ;.MWORD -100,-200,-25
+L7830:  .word $F380
+L7832:  .word $FF38
+L7834:  .word $FAC0                 ;.MWORD -84,-200,-21
+L7836:  .word $F380
+L7838:  .word $FF58
+L783A:  .word $FBA0                 ;.MWORD -70,-240,-18
+L783C:  .word $F100
+L783E:  .word $FF70
+L7840:  .word $FC80                 ;.MWORD -56,-200,-14
+L7842:  .word $F380
+L7844:  .word $FF90
+L7846:  .word $FD60                 ;.MWORD -42,-200,-11
+L7848:  .word $F380
+L784A:  .word $FFA8
+L784C:  .word $FE40                 ;.MWORD -28,-260,-7
+L784E:  .word $EFC0
+L7850:  .word $FFC8
+L7852:  .word $FF20                 ;.MWORD -14,-160,-4
+L7854:  .word $F600
+L7856:  .word $FFE0
+L7858:  .word $FBA0                 ;.MWORD -70,-120,-18
+L785A:  .word $F880
+L785C:  .word $FF70
+L785E:  .word $FF20                 ;.MWORD -14,0,-4
+L7860:  .word $0000
+L7862:  .word $FFE0
+
+;BZONE labels at its end address $7864 (no data of their own):
+.alias ENDZON           $7864
+
+;==============================================================================
+; MODULE BZSOUN   BZSOUN.MAC
+;   Sound driver: POKEY channel tables (start/frequency/change-rate/count per
+;   effect) and the per-frame sound routine that steps them; the HLL65
+;   structured-if macros (COND65) are included here.
+;==============================================================================
+
+;.SBTTL SOUND TABLES
+
+PNTRS:
+;EX1: 0FF,1,-1,6 DESCRIBES THE FOLLOWING SEQUENCE
+;0FF,0FE,0FD,0FC,0FB,0FA,0F9
+;EX2: 0,45,0,1 WILL OUTPUT 0 FOR 46 FRAMES
+;THE ABOVE MACRO GENERATES THE OFFSETS FROM THE 'SOUND' BASE ADDRESS
+;FOR A CHANNEL OF DATA.
+;IF LESS THAN 6 CHANNELS ARE USED, THE REMAINING POINTERS ARE SET TO 0
+;A 0 VALUE POINTER INDICATES AN IDLE CHANNEL.
+;EX: SOUND: .BYTE 0
+;CH1: .BYTE 0,45,0,1
+;CH2: .BYTE 0,45,0,2,3,7,9,1
+;BY CALLING 'OFFSET CH' , THE FOLLOWING WILL BE PLACED IN LINE
+;.BYTE CH1-SOUND
+;.BYTE CH2-SOUND
+;.BYTE 0,0,0,0
+;TABLES OF OFFSET POINTER FOR SOUNDS. (6 BYTES PER SOUND NUMBER)
+L7864:  .byte BE1-SOUND_7886, BE2-SOUND_7886, BE3-SOUND_7886, BE4-SOUND_7886 ;OFFSET BE
+L7868:  .byte WP1-SOUND_7886, WP2-SOUND_7886, WP3-SOUND_7886, WP4-SOUND_7886 ;OFFSET WP
+L786C:  .byte BK1-SOUND_7886, BK2-SOUND_7886, BK3-SOUND_7886, BK4-SOUND_7886 ;OFFSET BK
+L7870:  .byte BO1-SOUND_7886, BO2-SOUND_7886, BO3-SOUND_7886, BO4-SOUND_7886 ;OFFSET BO
+L7874:  .byte WG1-SOUND_7886, WG2-SOUND_7886, WG3-SOUND_7886, WG4-SOUND_7886 ;OFFSET WG
+L7878:  .byte DS1-SOUND_7886, DS2-SOUND_7886, DS3-SOUND_7886, DS4-SOUND_7886 ;OFFSET DS
+L787C:  .byte SA1-SOUND_7886, SA2-SOUND_7886, SA3-SOUND_7886, SA4-SOUND_7886 ;OFFSET SA
+L7880:  .byte SU1-SOUND_7886, SU2-SOUND_7886, SU3-SOUND_7886, SU4-SOUND_7886 ;OFFSET SU
+
+AUDCV:
+;AUDIO CONTROL CHANNEL VALUE (1 BYTE PRE SOUND NUMBER)
+L7884:  .byte $00
+
+IDLEV:
+L7885:  .byte $00
+
+BE1:
+BE2:             ;ALL OF THESE LABELS GO
+DS3:
+DS4:
+SA3:
+SA4:
+WG1:
+WG2:
+BK3:
+BK4:
+BO1:
+BO2:
+WP3:
+WP4:
+SOUND_7886:
+;SOUND TABLES
+;HRE SO THEY HAVE AN
+;OFFSET OF 0, WHICH
+;PREVENTS THE SOUND FROM
+;AFFECTING THOSE CHANNELS
+;WHICH HAVE AN OFFSET
+;OF 0
+L7886:  .byte $00
+
+WG3:
+;A GOOD PLACE FOR THE CHECKSUM
+;DATA STRUCTUREJ:
+;A CHANNEL CONSISTS OF A SERIES OF 4 BYTE SEQUENCES:
+;BYTE FUNCTION
+;1 STARTING VALUE OF SEQUENCE
+;2 # OF FRAMES BEFORE NEXT CHANGE
+;3 AMOUNT OF CHANGE
+;4 TOTAL NUMBER OF CHANGES (# OF DIFFERENT VALUES)
+;TO STOP A CHANNEL & RETURN TO ITS IDLE STATE, PUT IN AS A
+;2 BYTE SEQUENCE X,0 WHERE X WILL BE USED AS THE NEW IDLE VALUE.
+;NOTE: ALL SOUNDS END WHEN CHANNEL 1 GOES IDLE, SO IT SHOULD BE THE
+;LONGEST
+;TURN ALL SOUNDS OFF
+;WARNING - ENEMY IN RANGE
+L7887:  .byte $40, $02, $FF, $18
+L788B:  .byte $40, $02, $FF, $18
+L788F:  .byte $40, $02, $FF, $18
+L7893:  .byte $00, $00
+
+WG4:
+L7895:  .byte $A3, $30, $00, $03
+L7899:  .byte $00, $00
+
+BE3:
+;RADAR BEEP
+L789B:  .byte $23, $10, $00, $01
+L789F:  .byte $00, $00
+
+BE4:
+L78A1:  .byte $A3, $10, $00, $01
+L78A5:  .byte $00, $00
+
+BK1:
+;BLOCK SOUND
+L78A7:  .byte $10, $01, $00, $20
+L78AB:  .byte $00, $00
+
+BK2:
+L78AD:  .byte $C1, $10, $FF, $02
+L78B1:  .byte $00, $00
+
+WP1:
+;BUMP (BOING) SOUND
+L78B3:  .byte $C0, $01, $F6, $06
+L78B7:  .byte $84, $01, $09, $0C
+L78BB:  .byte $F0, $01, $F8, $0C
+L78BF:  .byte $90, $01, $07, $0C
+L78C3:  .byte $E4, $01, $FA, $0C
+L78C7:  .byte $9C, $01, $05, $0C
+L78CB:  .byte $D8, $01, $FC, $0C
+L78CF:  .byte $A8, $01, $03, $0C
+L78D3:  .byte $CC, $01, $FE, $0C
+L78D7:  .byte $B4, $01, $01, $0C
+L78DB:  .byte $00, $00
+
+WP2:
+L78DD:  .byte $AB, $04, $FF, $09
+L78E1:  .byte $A2, $27, $FF, $02
+L78E5:  .byte $00, $00
+
+BO3:
+;BONUS
+L78E7:  .byte $10, $70, $00, $02
+L78EB:  .byte $00, $00
+
+BO4:
+L78ED:  .byte $A2, $20, $00, $01
+L78F1:  .byte $A0, $20, $00, $01
+L78F5:  .byte $A2, $20, $00, $01
+L78F9:  .byte $A0, $20, $00, $01
+L78FD:  .byte $A2, $20, $00, $01
+L7901:  .byte $A0, $20, $00, $01
+L7905:  .byte $A2, $20, $00, $01
+L7909:  .byte $00, $00
+
+DS1:
+;SAUCER DISINTEGRATION
+L790B:  .byte $30, $01, $FC, $0C
+L790F:  .byte $30, $01, $FC, $0C
+L7913:  .byte $00, $00
+
+DS2:
+L7915:  .byte $A3, $02, $00, $0C
+L7919:  .byte $00, $00
+
+SA1:
+;SAUCER SOUND
+L791B:  .byte $40, $01, $FE, $10
+L791F:  .byte $20, $01, $02, $10
+L7923:  .byte $40, $01, $FE, $10
+L7927:  .byte $20, $01, $02, $10
+L792B:  .byte $00, $00
+
+SA2:
+L792D:  .byte $A1, $10, $00, $04
+L7931:  .byte $00, $00
+
+SU1:
+L7933:  .byte $D9, $30, $00, $01
+L7937:  .byte $A2, $30, $00, $01
+L793B:  .byte $90, $30, $00, $01
+L793F:  .byte $80, $30, $00, $01
+L7943:  .byte $90, $30, $00, $01
+L7947:  .byte $A2, $30, $00, $01
+L794B:  .byte $90, $30, $00, $01
+L794F:  .byte $80, $30, $00, $02
+L7953:  .byte $A2, $30, $00, $04
+L7957:  .byte $00, $00
+
+SU2:
+SU4:
+L7959:  .byte $A7, $30, $00, $0D
+L795D:  .byte $00, $00
+
+SU3:
+L795F:  .byte $6C, $30, $00, $01
+L7963:  .byte $51, $30, $00, $01
+L7967:  .byte $48, $30, $00, $01
+L796B:  .byte $40, $30, $00, $01
+L796F:  .byte $48, $30, $00, $01
+L7973:  .byte $51, $30, $00, $01
+L7977:  .byte $48, $30, $00, $01
+L797B:  .byte $40, $30, $00, $02
+L797F:  .byte $51, $30, $00, $04
+L7983:  .byte $00, $00
+
+;------------------------------------------------------------------------------
+; SNDON - [note] Start a sound effect: A = the effect's SNDWRD bit; a bit-scan loop (ASL/DEX) finds its 0-7
+;   index, which is converted to an index into PNTRS (8 effects x 4 channel-pointer bytes each);
+;   for every one of the 4 POKEY channels whose PNTRS byte for this effect is nonzero, sets that
+;   channel's POINT/FRAMES/COUNT so MODSND starts playing it next frame.
+;------------------------------------------------------------------------------
+SNDON:
+L7985:  PHA
+L7986:  TXA
+L7987:  PHA
+L7988:  TYA
+L7989:  PHA
+L798A:  TSX
+L798B:  LDA  $0103,X
+L798E:  BEQ  L7996                  ;IFNE
+L7990:  LDX  #$08                   ;START SOUND # SEARCH AT TOP
+L7992:  ASL                         ;WHICH BIT IS IT?
+L7993:  DEX
+L7994:  BCC  L7992                  ;CSEND  FOUND HIM
+L7996:  TXA
+L7997:  ASL                         ;X2 + CLC
+L7998:  ASL                         ;X6 + CLC
+L7999:  ADC  #$03                   ;CAUSE IT COUNTS DOWN NOT UP
+L799B:  TAY                         ;USE AS INDEX
+L799C:  CPY  #PTLEN+7               ;PAST TABLE?
+L799E:  BCS  L79B3                  ;IFCC
+L79A0:  LDX  #$03
+L79A2:  LDA  PNTRS,Y
+L79A5:  BEQ  L79AF                  ;IFNE  IF POINTER 0 DONT TOUCH THIS CHANNEL
+L79A7:  STA  POINT,X                ;IF NOT SET UP POINTER
+L79A9:  LDA  #$01
+L79AB:  STA  FRAMES,X               ;DUMMY START, NO SOUND
+L79AD:  STA  COUNT,X                ;TILL MODSND STORES TO POKEY
+L79AF:  DEY
+L79B0:  DEX
+L79B1:  BPL  L79A2                  ;MIEND
+L79B3:  PLA
+L79B4:  TAY
+L79B5:  PLA
+L79B6:  TAX
+L79B7:  PLA
+L79B8:  RTS
+
+;------------------------------------------------------------------------------
+; MODSND - SOUND ROUTINE
+;   CONTINUES A PREVIOUSLY STARTED SOUND
+;   WHEN CHANNEL 1 GOES IDLE, ALL SOUND ENDS
+;------------------------------------------------------------------------------
+MODSND:
+L79B9:  LDX  #$03                   ;6 CHANNELS
+
+MODSND_10:
+L79BB:  LDA  FRAMES,X
+L79BD:  BEQ  MODSND_15
+L79BF:  DEC  FRAMES,X               ;CHANGE THIS FRAME
+L79C1:  BNE  MODSND_30
+L79C3:  LDY  POINT,X                ;GET DATA POINTER
+L79C5:  BEQ  MODSND_30              ;NOT ACTIVE CHANNEL
+L79C7:  DEC  COUNT,X                ;DATA CHANGES LEFT?
+L79C9:  BNE  MODSND_20              ;NO -- NONE
+L79CB:  LDA  SOUND_7886+STVAL,Y     ;GET CURRENT VALUE
+L79CE:  STA  CURRENT,X              ;SAVE
+L79D0:  LDA  SOUND_7886+FRCNT,Y     ;GET FRAMES OF THIS LEVEL
+L79D3:  STA  FRAMES,X               ;UPDATE FRAME NUMBER
+L79D5:  BNE  MODSND_17              ;IF 0, THIS CHANNEL JUST ENDED
+L79D7:  STA  POINT,X                ;SET POINTER TO 0 TO IDLE CHANNEL
+L79D9:  TXA                         ;A CHEAP WAY TO TEST IF THIS IS CH 1
+L79DA:  BNE  MODSND_30              ;IF NOT CH 1, JUST IDLE CHANNEL
+
+MODSND_15:
+L79DC:  LDA  IDLEV                  ;GET IDLE VALUE
+L79DF:  STA  CURRENT,X              ;SAVE
+L79E1:  STA  AUDF1,X                ;STORE TO POKEY
+L79E4:  LDA  #$00                   ;0 POINTER
+L79E6:  STA  POINT,X
+L79E8:  DEX
+L79E9:  BPL  MODSND_10
+;SOUNDS OFF IN SOUND STATE
+L79EB:  JMP  PMRBIL
+
+MODSND_17:
+L79EE:  LDA  SOUND_7886+NUMBER,Y
+L79F1:  STA  COUNT,X                ;# OF CHANGES
+L79F3:  LDA  POINT,X
+L79F5:  CLC
+L79F6:  ADC  #$04                   ;POINT TO NEXT SEQUENCE
+L79F8:  STA  POINT,X
+L79FA:  JMP  MODSND_30
+
+MODSND_20:
+L79FD:  LDA  SOUND_7886+FRCNT-4,Y   ;FRAME RATE
+;THE -4 TO CORRECT FOR THE POINTER BEING ALREADY
+;INCREMENTED TO POINT TO THE NEXT BLOCK.
+L7A00:  STA  FRAMES,X
+L7A02:  LDA  CURRENT,X
+L7A04:  CLC
+L7A05:  ADC  SOUND_7886+CHANGE-4,Y  ;STEP THRU SEQUENCE
+L7A08:  STA  CURRENT,X
+
+MODSND_30:
+L7A0A:  LDA  CURRENT,X              ;MORE THAN 1 PATH HERE SO LOAD CURRENT
+L7A0C:  STA  AUDF1,X                ;OUTPUT
+L7A0F:  LDA  AUDCV                  ;GET CONTROL BYTE
+L7A12:  STA  AUDCTL
+L7A15:  DEX
+L7A16:  BPL  MODSND_10
+
+PMRBIL:
+L7A18:  RTS
+
+;==============================================================================
+; MODULE VGUT   VGUT.MAC
+;   Vector generator utility subroutines: VGRTSL, VGHALT, VGHEX(Z),
+;   VGJMPL/VGJSRL, VGSTAT, VGCNTR, VGADD/VGADD2, VGSCAL, VGDOT, VGVTR/VGVCTR.
+;==============================================================================
+
+;------------------------------------------------------------------------------
+; VGRTSL - VGRTSL - ADD RTSL TO VECTOR LIST
+;   ZERO PAGE GLOBALS
+;   EXTERNAL ENTRY POINTS
+;   ENTRY POINTS
+;   DATE INITIATED: 10-OCT-79
+;   PROJECT CHARGE #: 23803
+;   DISK #: 105, B46
+;   HARWARE REQUIREMENTS: ANALOG AUTO-NORMALIZING VECTOR GENERATOR
+;   MEMORY REQUIREMENTS:
+;   NOT APPLICABLE - SUBROUTINE
+;   INTERRUPT REQUIREMENTS:
+;   NOT APPLICABLE - SUBROUTINE
+;   ASSEMBLY COMMAND STRING:
+;   R MAC65
+;   DX1:VGUT,DK1:VGUT=DX1:VGUT/C
+;   LINK COMMAND STRING:
+;   NOT APPLICABLE - SUBROUTINE
+;   PROGRAM DESCRIPTION:
+;   A SET OF UTILITY ROUTINES FOR GENERATING
+;   VECTORS USING THE ANALOG AUTO-NORMALIZING VECTOR GENERATOR.
+;   ZERO PAGE GLOBALS REQUIRED:
+;   VGLIST: THIS 2 BYTE VARIABLE CONTAINS THE CURRENT VECTOR GENERATOR RAM
+;   ADDRESS USED TO BUILD INSTRUCTIONS FOR THE VECTOR GENERATOR.
+;   IT SHOULD BE INITIALIZED BEFORE CALLING ANY OF THESE ROUTINES.
+;   XCOMP: THIS 4 BYTE VARIABLE IS USED TO CONTAIN THE X (LSB,MSB) COMPONENT
+;   AND Y (LSB,MSB) COMPONENT USED IN SEVERAL OF THE VECTOR INSTRUC-
+;   TIONS. FOR THE VGVCTR ROUTINE THESE FIELDS ARE SIGNED 2'S
+;   COMPLEMENT NUMBERS.
+;   VGBRIT: THIS VARIABLE IS USED BY VGVCTR AND VGSTAT TO GENERATE VECTORS
+;   WITH THE GIVEN BRIGHTNESS. IT'S VALUES ARE 0,10,20,30,
+;   40,...F0 WHERE 0 IS OFF AND F0 IS MAX BRIGHTNESS.
+;   IN THE VECTOR INSTRUCTIONS ONLY THE UPPER 3 BITS IS USED
+;   IF Z=1 IN THE VECTOR INSTRUCTIONS THEN THE LAST NON-ZERO
+;   Z IS USED.
+;   EXTERNAL ENTRY POINTS REQUIRED:
+;   VGMSGA: THIS ENTRY POINT PROVIDES JSRL INSTRUCTIONS TO THE CHAR.X
+;   ROUTINES. THIS ENTRY POINT IS PROVIDED BY VECAN.MAC.
+;   THESE ROUTINES WERE WRITTEN TO PROVIDE PROGRAMMERS USING LYLE RAIN'S VECTOR
+;   GENERATOR A MEANS OF:
+;   1) DYNAMICALLY GENERATING VECTORS JUST AS VECMAC ALLOWS STATIC
+;   GENERATION OF VECTORS.
+;   2) DISPLAY NUMBERS WITH OR WITHOUT ZERO SUPPRESSION.
+;   EXAMPLE 1:
+;   LDA I,VECRAM&0FF ;INITIALIZE VECTOR RAM POINTER
+;   STA VGLIST
+;   LDA I,VECRAM/100
+;   STA VGLIST+1
+;   JSR CENTER ;CENTER BEAM IN MIDDLE OF SCREEN.
+;   LDA I,256./4 ;POSITION BEAM AT (256,256)
+;   LDX I,256./4
+;   JSR VGSVTR
+;   ETC....
+;   EXAMPLE 2:
+;   LDA PLAYER ;DISPLAY PLAYER NUMBER
+;   JSR VGHEX ;REMEMBER BEAM MUST BE POSITIONED CORRECTLY
+;   LDA SCORE1 ;MSB OF SCORE
+;   LSR
+;   LSR
+;   LSR
+;   LSR
+;   SEC
+;   JSR VGHEXZ ;DISPLAY UPPER DIGIT WITH ZERO SUPPRESSION
+;   LDA SCORE1
+;   JSR VGHEXZ ;DISPLAY SECOND DIGIT WITH ZERO SUPPRESSION
+;   LDA SCORE0 ;LSB OF SCORE
+;   PHP ;SAVE ZERO SUPPRESSION FLAG
+;   LSR
+;   LSR
+;   LSR
+;   LSR
+;   PLP
+;   JSR VGHEXZ ;DISPLAY THIRD DIGIT WITH ZERO SUPPRESSION
+;   LDA SCORE0
+;   JSR VGHEX ;DISPLAY LAST DIGIT
+;   ETC....
+;   VGRTSL - ADD RTSL TO VECTOR LIST
+;   ENTRY (VGLIST,VGLIST+1) = VECTOR LIST ADDRESS
+;   EXIT (VGLIST,VGLIST+1) = NEW VECTOR LIST ADDRESS
+;   USES A,Y,(VGLIST,VGLIST+1)
+;------------------------------------------------------------------------------
+VGRTSL:
+L7A19:  LDA  #$C0                   ;DXXX IS RTSL
+L7A1B:  BNE  VGHAL1                 ;ALWASY
+
+;------------------------------------------------------------------------------
+; VGHALT - VGHALT - CENTER AND HALT VECTOR GENERATOR
+;   VHALT - CENTER AND HALT VECTOR GENERATOR
+;   ENTRY (VGLIST,VGLIST+1) = VECTOR LIST ADDRESS
+;   EXIT (VGLIST,VGLIST+1) = NEW VECTOR LIST ADDRESS
+;   USES A,X,Y,(VGLIST,VGLIST+1)
+;------------------------------------------------------------------------------
+VGHALT:
+L7A1D:  JSR  VGCNTR                 ;CENTER FIRST
+L7A20:  LDA  #$20                   ;BXXX IS HALT
+
+VGHAL1:
+L7A22:  LDY  #$00
+L7A24:  STA  (VGLIST),Y
+L7A26:  JMP  VGWAI1                 ;ADD LAST BYTE
+
+;------------------------------------------------------------------------------
+; VGHEXZ - VGHEXZ - DISPLAY DIGIT WITH ZERO SUPPRESSION
+;   VGHEXZ - DISPLAY DIGIT WITH ZERO SUPPRESSION
+;   THIS ROUTINE WILL DISPLAY A DIGIT USING THE DEFAULT CHARACTER SIZE.
+;   NO ATTEMPT IS MADE TO USE THE VARIABLE VGSIZE.
+;   ENTRY (A) = LOWER 4 BITS TO BE DISPLAYED
+;   (C) = CARRY CLEAR IF NO ZERO SUPPRESSION
+;   EXIT (C) = CARRY CLEARED IF NON-ZERO DIGIT DISPLAYED
+;   USES A,X,Y,(VGLIST,VGLIST+1)
+;------------------------------------------------------------------------------
+VGHEXZ:
+L7A29:  BCC  VGHEX                  ;IF NO ZERO SUPPRESSION
+L7A2B:  AND  #$0F
+L7A2D:  BEQ  VGHEX1                 ;LEAVE C SET
+
+;------------------------------------------------------------------------------
+; VGHEX - VGHEX - DISPLAY DIGIT
+;   VGHEX - DISPLAY DIGIT
+;   THIS ROUTINE WILL DISPLAY A DIGIT USING THE DEFAULT CHARACTER SIZE.
+;   NO ATTEMPT IS MADE TO USE THE VARIABLE VGSIZE.
+;   ENTRY (VGLIST,VGLIST+1) = VECTOR LIST ADDRESS
+;   (A) = LOWER 4 BITS TO BE DISPLAYED
+;   EXIT (VGLIST,VGLIST+1) = NEW VECTOR LIST ADDRESS
+;   (C) = CARRY IS CLEAR
+;   USES A,X,Y,(VGLIST,VGLIST+1)
+;------------------------------------------------------------------------------
+VGHEX:
+L7A2F:  AND  #$0F
+L7A31:  CLC
+L7A32:  ADC  #$01                   ;CLEARS C BIT
+
+VGHEX1:
+L7A34:  PHP                         ;SAVE C FLAG
+L7A35:  ASL
+L7A36:  LDY  #$00
+L7A38:  TAX
+L7A39:  LDA  VGMSGA,X
+L7A3C:  STA  (VGLIST),Y
+L7A3E:  LDA  VGMSGA+1,X             ;COPY JSRL TO CHARACTER ROUTINE
+L7A41:  INY
+L7A42:  STA  (VGLIST),Y
+L7A44:  JSR  VGADD                  ;UPDATE VECTOR LIST POINTER
+L7A47:  PLP                         ;RESTORE C FLAG
+L7A48:  RTS
+
+;------------------------------------------------------------------------------
+; VGJMPL - VGJMPL - ADD JMPL TO VECTOR LIST
+;   VGJMPL - ADD JMPL TO VECTOR LIST
+;   ENTRY (VGLIST,VGLIST+1) = VECTOR LIST ADDRESS
+;   (A) = MSB OF ADDRESS
+;   (X) = LSB OF ADDRESS
+;   EXIT (VGLIST,VGLIST+1) = NEW VECTOR LIST ADDRESS
+;   USES A,Y,(VGLIST,VGLIST+1)
+;------------------------------------------------------------------------------
+VGJMPL:
+L7A49:  LSR
+L7A4A:  AND  #$0F                   ;BASE ADDRESS IS RELATIVE TO ZERO
+L7A4C:  ORA  #$E0
+
+VGJMP1:
+L7A4E:  LDY  #$01
+L7A50:  STA  (VGLIST),Y             ;SAVE MSB + OPCODE
+L7A52:  DEY
+L7A53:  TXA
+L7A54:  ROR
+L7A55:  STA  (VGLIST),Y             ;LSB OF ADDRESS
+L7A57:  INY
+L7A58:  BNE  VGADD                  ;UPDATE VECTOR POINTER
+
+;------------------------------------------------------------------------------
+; VGJSRL - VGJSRL - ADD JSRL TO VECTOR LIST
+;   VGJSRL - ADD JSRL TO VECTOR LIST
+;   ENTRY (VGLIST,VGLIST+1) = VECTOR LIST ADDRESS
+;   (A) = MSB OF ADDRESS
+;   (X) = LSB OF ADDRESS
+;   EXIT (VGLIST,VGLIST+1) = NEW VECTOR LIST ADDRESS
+;   USES A,Y,(VGLIST,VGLIST+1)
+;------------------------------------------------------------------------------
+VGJSRL:
+L7A5A:  LSR
+L7A5B:  AND  #$0F                   ;BASE ADDRESS IS RELATIVE
+L7A5D:  ORA  #$A0
+L7A5F:  BNE  VGJMP1                 ;MOVE INTO VECTOR LIST
+
+;.SBTTL VGSTAT - SET VECTOR GENERATOR STATUS
+
+VGSTA1:
+;VGSTAT - SET VECTOR GENERATOR STATUS
+;ENTRY (A)=HI/LOW AND IN/OUT FLAGS AND ENABLE (0,1,2,3,OR 4)
+;(Y)=VECTOR BRIGHTNESS (0,10,20,...,F0)
+;(VGLIST,VGLIST+1)=VECTOR LIST ADDRESS
+;EXIT (VGLIST,VGLIST+1)=NEW VECTOR LIST ADDRESS
+;USES A,X,Y,(VGLIST,VGLIST+1)
+L7A61:  LDY  VGBRIT
+
+;------------------------------------------------------------------------------
+; VGSTAT - [note] VGSTA1's second entry point, for callers that already have the brightness in Y (skips LDY
+;   VGBRIT): ORA #$60 packs the enable/hi-low/in-out flags into the STAT opcode, then JMP VGADD2.
+;------------------------------------------------------------------------------
+VGSTAT:
+L7A63:  ORA  #$60
+L7A65:  TAX                         ;OPCODE + LIMIT BITS
+L7A66:  TYA
+L7A67:  JMP  VGADD2                 ;ADD 2 BYTES TO VECTOR LIST
+
+;------------------------------------------------------------------------------
+; VGCNTR - VGCNTR - CENTER BEAM IN MIDDLE OF SCREEN
+;   VGCNTR - CENTER BEAM IN MIDDLE OF SCREEN
+;   ENTRY (VGLIST,VGLIST+1)=VECTOR LIST ADDRESS
+;   USES A,X,Y,(VGLIST,VGLIST+1)
+;------------------------------------------------------------------------------
+VGCNTR:
+L7A6A:  LDA  #$40                   ;TIMER + SCALE
+L7A6C:  LDX  #$80                   ;OPCODE
+
+;------------------------------------------------------------------------------
+; VGADD2 - VGADD2 - ADD 2 WORDS TO VECTOR LIST
+;   JMP VGADD2
+;   VGADD2 - ADD 2 WORDS TO VECTOR LIST
+;   ENTRY (A)=FIRST BYTE
+;   (X)=SECOND BYTE
+;   EXIT (VGLIST,VGLIST+1)=NEW VECTOR LIST POINTER
+;   USES A,Y,(VGLIST,VGLIST+1)
+;------------------------------------------------------------------------------
+VGADD2:
+L7A6E:  LDY  #$00
+L7A70:  STA  (VGLIST),Y             ;LSB BYTE
+L7A72:  INY
+L7A73:  TXA
+L7A74:  STA  (VGLIST),Y             ;MSB BYTE
+
+;------------------------------------------------------------------------------
+; VGADD - VGADD - ADD Y+1 TO VECTOR ADDRESS
+;   JMP VGADD ;UPDATE VECTOR LIST POINTER
+;   VGADD - ADD Y+1 TO VECTOR LIST ADDRESS
+;   ENTRY (VGLIST,VGLIST+1) = VECTOR LIST ADDRESS
+;   (Y) = VALUE+1 TO BE ADDED TO VECTOR LIST
+;   EXIT (VGLIST,VGLIST+1) = NEW VECTOR LIST ADDRESS
+;   USES A,(VGLIST,VGLIST+1)
+;------------------------------------------------------------------------------
+VGADD:
+L7A76:  TYA                         ;ADD 1+(Y) TO VGLIST
+L7A77:  SEC
+L7A78:  ADC  VGLIST
+L7A7A:  STA  VGLIST
+L7A7C:  BCC  VGADD_10
+L7A7E:  INC  VGLIST+1
+
+VGADD_10:
+L7A80:  RTS
+
+;------------------------------------------------------------------------------
+; VGSCA1 - VGSCAL-SET VECTOR GENERATOR SCALE
+;   VGSCAL-SET VECTOR GENERATOR SCALE
+;   ENTRY (Y)=LINEAR SCALE FACTOR (0=FULL SIZE, FF=1/256 SIZE)
+;   (A)=POWER OF 2 SCALE FACTOR (0=FULL SIZE,1=1/2 SIZE,...)
+;   (VGLIST,VGLIST+1)=VECTOR LIST ADDRESS
+;   EXIT (VGLIST,VGLIST+1)=NEW VECTOR LIST ADDRESS
+;   USES A,X,Y(VGLIST,VGLIST+1)
+;------------------------------------------------------------------------------
+VGSCA1:
+L7A81:  LDY  #$00                   ;USE FULL SIZE
+
+;------------------------------------------------------------------------------
+; VGSCAL - C SET SCALE FACTOR  (comment at the call)
+;------------------------------------------------------------------------------
+VGSCAL:
+L7A83:  ORA  #$70                   ;OPCODE + SCALE SIZE
+L7A85:  TAX
+L7A86:  TYA
+L7A87:  JMP  VGADD2                 ;ADD 2 BYTES TO VECTOR LIST
+
+;------------------------------------------------------------------------------
+; VGDOT - VGDOT - DRAW A DOT AT THE CURRENT POSITION
+;   VGDOT - DRAW A DOT AT CURRENT POSITION
+;   ENTRY (VGLIST,VGLIST+1) = VECTOR LIST ADDRESS
+;   (A) = INTENSITY (0 = OFF, EQ = MAX, 20 = INCREMENT)
+;   EXIT (VGLIST,VGLIST+1) = NEW VECTOR LIST ADDRESS
+;   (VGBRIT) = NEW INTENSITY
+;   USES A,Y,(VGLIST,VGLIST+1)
+;------------------------------------------------------------------------------
+VGDOT:
+L7A8A:  TAY
+L7A8B:  LDA  #$00
+L7A8D:  TAX
+
+;------------------------------------------------------------------------------
+; VGVTR - VGVTR - SHORT FORM VGVCTR CALL
+;   JMP VGVTR
+;   VGVTR - SHORT FORM VGVCTR CALL
+;   ENTRY (VGLIST,VGLIST+1) = VECTOR LIST ADDRESS
+;   (A) = CHANGE IN X/4 (-80 TO +7F)
+;   (X) = CHANGE IN Y/4 (-80 TO +7F)
+;   (Y) = VECTOR BRIGHTNESS (0,10,20,...,F0)
+;   EXIT (VGLIST,VGLIST+1) = NEW VECTOR LIST ADDRESS
+;   (VGBRIT)=NEW VECTOR BRIGHTNESS
+;   USES A,X,Y,(VGLIST,VGLIST+1),(XCOMP,XCOMP+3)
+;------------------------------------------------------------------------------
+VGVTR:
+L7A8E:  STY  VGBRIT
+
+;------------------------------------------------------------------------------
+; VGVTR1 - POSITION BEAM  (comment at the calls)
+;------------------------------------------------------------------------------
+VGVTR1:
+L7A90:  LDY  #$00
+L7A92:  ASL
+L7A93:  BCC  VGVTR1_10              ;SIGN EXTEND
+L7A95:  DEY                         ;Y=-1
+
+VGVTR1_10:
+L7A96:  STY  XCOMP+1                ;WITH SCALE=0 A=1 MEANS=DOTS ON XY
+L7A98:  ASL
+L7A99:  ROL  XCOMP+1
+L7A9B:  STA  XCOMP
+L7A9D:  TXA                         ;WRITE Y VALUE TO XCOMP+2,XCOMP+3
+L7A9E:  ASL
+L7A9F:  LDY  #$00
+L7AA1:  BCC  VGVTR1_20              ;SIGN EXTEND
+L7AA3:  DEY                         ;Y=-1
+
+VGVTR1_20:
+L7AA4:  STY  XCOMP+3
+L7AA6:  ASL
+L7AA7:  ROL  XCOMP+3
+L7AA9:  STA  XCOMP+2
+
+;------------------------------------------------------------------------------
+; VGVTR2 - POSITION BEAM  (comment at the call)
+;   C ADD VCTR TO VGLIST  (another call)
+;------------------------------------------------------------------------------
+VGVTR2:
+L7AAB:  LDX  #XCOMP
+
+;.SBTTL VGVCTR - ADD VECTOR TO VECTOR LIST
+
+VGVCTR:
+;JMP VGVCTR ;GENERATE VECTOR
+;VGVCTR - ADD VECTOR TO VECTOR LIST
+;NOTE: IF THE NUMBERS GIVEN ARE MORE THAN
+;15 BITS IN SIGNIFICANCE THEN AN
+;INCORRECT VECTOR WILL BE GENERATED
+;ENTRY (X) =4 ZERO PAGE LOCN. CONTAINING (X LSB,X MSB,Y MSB,Y LSB)
+;(VGLIST,VGLIST+1) = VECTOR LIST ADDRESS
+;(VGBRIT)=VECTOR BRIGHTNESS (ONLY THE UPPER 3 BITS ARE USED)
+;EXIT (VGLIST,VGLIST+1) = NEW VECTOR LIST ADDRESS
+;USES A,X,Y,(VGLIST,VGLIST+1)
+L7AAD:  LDY  #$00
+L7AAF:  LDA  $02,X                  ;Y LSB
+L7AB1:  STA  (VGLIST),Y
+L7AB3:  LDA  $03,X                  ;Y MSB
+L7AB5:  AND  #$1F                   ;CLEAR SIGN EXTENSION
+L7AB7:  INY
+L7AB8:  STA  (VGLIST),Y
+L7ABA:  LDA  $00,X                  ;X LSB
+L7ABC:  INY
+L7ABD:  STA  (VGLIST),Y
+L7ABF:  LDA  $01,X                  ;X MSB
+L7AC1:  EOR  VGBRIT
+L7AC3:  AND  #$1F                   ;CLEAR SIGN EXTENSION
+L7AC5:  EOR  VGBRIT                 ;COMBINE UPPER 3 BITS OF VGBRIT WITH X MSB
+
+VGWAI1:
+L7AC7:  INY
+L7AC8:  STA  (VGLIST),Y             ;SET INTENSITY
+L7ACA:  BNE  VGADD                  ;ALWAYS - UPDATE VGLIST POINTER
+
+;==============================================================================
+; MODULE BZSTST   BZSTST.MAC
+;   Power-on / self-test: RESET entry, zero-page/VG-RAM/ROM/EAROM tests, the
+;   bookkeeping and switch-test displays, VG diagnostic pictures; the
+;   alphanumeric (ASCVG), vector shape (VGMC) and Mathbox diagnostic (MBDIAG)
+;   macros are included here. Ends with the 6502 vectors at $7FFA.
+;==============================================================================
+
+;------------------------------------------------------------------------------
+; PWRON - POWERON
+;   PROGRAMMER: RICH MOORE
+;   MACRO .ASCVG CONVERTS STRING OF ALPHANUMERICS TO OFFSET VALUES INTO
+;   VGMSGA TABLE (TABLE OF VG CHARACTER JSRL'S)
+;   CNTR - CENTER BEAM IN MIDDLE OF SCREEN.
+;   HALT - HALT THE VECTOR GENERATOR INSTRUCTION
+;   WHEN EXECUTED BY VG SETS THE VG HALT FLAG.
+;   JSRL - JUMP SUBROUTINE INSTRUCTION
+;   THE LOWER THREE NYBBLES SPECIFY AN ADDRESS RELATIVE
+;   TO THE BEGINNING OF THE VECTOR GENERATOR ADDRESSABLE
+;   INSTRUCTION SPACE DIVIDED BY 2. THE TOTAL ADDRESS
+;   AREA IS 8K BYTES.
+;   STAT - SET VECTOR GENERATOR STATUS
+;   THE FIRST PARAMETER IS AN INTENSITY TO SET THE INTENSITY REGISTER.
+;   THE SECOND PARAMETER IS CALLED HI/LOW. THE CURRENT BEAM POSITION
+;   IS USED TO DEFINE THE CORNERS OF A RECTANGULAR AREA. IF HI/LOW=1,
+;   THEN THIS DEFINES THE UPPER RIGHT CORNER; OTHERWISE, IT IS THE
+;   LOWER LEFT CORNER. THE THIRD PARAMETER IS CALLED IN/OUT. IF IT
+;   IS 0, THEN LINES ARE DISPLAYED ON THE INSIDE ELSE THE OUTSIDE.
+;   SCAL - SET VECTOR GENERATOR SCALE
+;   THE FIRST PARAMETER IS THE POWER OF 2 SCALE. A VALUE OF 0 MEANS
+;   FULL SIZE, 1=1/2 SIZE, 2=1/4, ..., 7=1/128 SIZE. THE SECOND
+;   PARAMETER IS THE LINEAR SCALE (OPTIONAL). A VALUE OF 0 MEANS
+;   FULL SIZE, 80=1/2 SIZE, FF=1/256 SIZE.
+;   RTSL - RETURN FROM SUBROUTINE
+;   THIS INSTRUCTION IS ANALOGOUS TO AN RTS INSTRUCTION FOR
+;   A MICROPROCESSOR. THE VG IS CAPABLE OF FIVE LEVELS OF
+;   SUBROUTINE CALLS (JSRL).
+;   JMPL - JUMP TO ROUTINE
+;   THE LOWER THREE BYTES REFERENCES AN ADDRESS JUST AS
+;   THE LOWER THREE BYTES OF AN JSRL INSTRUCTION. THE
+;   INSTRUCTION OPERATES JUST AS A JMP INSTRUCTION DOES
+;   FOR A 650X OR 6800 MICRO.
+;   VCTR - DRAW VECTOR INSTRUCTION
+;   THIS INSTRUCTION DRAWS A VECTOR ON THE DISPLAY AREA
+;   RELATIVE TO THE PREVIOUS BEAM POSITION BEFORE THE
+;   INSTRUCTION IS EXECUTED. DX IS THE CHANGE IN BEAM X
+;   POSITION; DY IS THE CHANGE IN BEAM Y POSITION; ZZ
+;   SPECIFIES THE BEAM INTENSITY (0 THROUGH 7., 0 IS
+;   NO INTENSITY, 7. IS BRIGHTEST INTENSITY).
+;   ALPHA - ALPHANUMERIC JSRL LIST INSTRUCTION
+;   THIS INSTRUCTION CONSTRUCTS A JSRL INSTRUCTION
+;   FOR EVERY CHARACTER IN THE CALLING PARAMETER
+;   STRING, THUS A LABEL CHAR.X MUST EXIST FOR EVERY
+;   UNIQUE CHARACTER X IN THE PARAMETER STRING.
+;   RESERVED CHARACTERS USED BY THE PDP SYSTEMS
+;   (IE @ : ; ETC.) SHOULD NOT BE USED.
+;------------------------------------------------------------------------------
+PWRON:
+L7ACC:  LDX  #$7F                   ;C INIT STACKF
+L7ACE:  TXS
+L7ACF:  LDA  #$00
+L7AD1:  STA  SKCTL
+L7AD4:  CLD
+L7AD5:  TAX
+
+PWRON_10:
+L7AD6:  STA  $00,X                  ;C CLEAR RAM PAGES
+L7AD8:  INX
+L7AD9:  BNE  PWRON_10
+L7ADB:  LDY  #$07                   ;C RESET POKEY
+L7ADD:  STY  SKCTL
+
+PWRON_12:
+L7AE0:  STA  $0100,X
+L7AE3:  STA  $0200,X
+L7AE6:  STA  $0300,X
+L7AE9:  STA  VECRAM,X
+L7AEC:  STA  VECRAM+$100,X
+L7AEF:  STA  VECRAM+$200,X
+L7AF2:  STA  VECRAM+$300,X
+L7AF5:  STA  VECRAM+$400,X
+L7AF8:  STA  VECRAM+$500,X
+L7AFB:  STA  VECRAM+$600,X
+L7AFE:  STA  VECRAM+$700,X
+L7B01:  STA  VECRAM+$800,X
+L7B04:  STA  VECRAM+$900,X
+L7B07:  STA  VECRAM+$A00,X
+L7B0A:  STA  VECRAM+$B00,X
+L7B0D:  STA  VECRAM+$C00,X
+L7B10:  STA  VECRAM+$D00,X
+L7B13:  STA  VECRAM+$E00,X
+L7B16:  STA  VECRAM+$F00,X
+L7B19:  STA  WTCHDG
+L7B1C:  INX
+L7B1D:  BNE  PWRON_12
+L7B1F:  STA  VSTOP                  ;C RESET VECTOR GEN
+L7B22:  LDA  HALT                   ;D IF SELF TEST
+L7B25:  AND  #ST_BIT
+L7B27:  BNE  PWRON_15
+L7B29:  LDA  #$20                   ;C ENABLE SOUNDS
+L7B2B:  STA  SOUND
+L7B2E:  JMP  RAMTST
+
+PWRON_15:
+L7B31:  LDA  #$01                   ;C INIT VG BUFFER
+L7B33:  STA  VECRAM
+L7B36:  LDA  #$E4
+L7B38:  STA  VECRAM+1
+L7B3B:  LDA  #$20
+L7B3D:  STA  VECRAM+2
+L7B40:  STA  VECRAM+3
+L7B43:  STA  VECRAM+$802
+L7B46:  STA  VECRAM+$803
+L7B49:  LDA  #$01                   ;C INIT GAME STATE
+L7B4B:  STA  ACTION
+L7B4D:  STA  GOVER
+L7B4F:  LDA  #$FE                   ;C SET UP BUZZ BOMB SOUND
+L7B51:  STA  CHAN3F
+L7B54:  INX
+L7B55:  STA  CHAN4F
+L7B58:  LDX  #[HSCNUM*3]-1
+L7B5A:  LDY  #$00
+
+PWRON_20:
+L7B5C:  LDA  FDGTBL-2,X             ;C INIT HIGH SCORE TABLE
+L7B5F:  STA  INITLS-2,X
+L7B62:  LDA  #$05
+L7B64:  STA  HSCTBL-2,X
+L7B67:  LDA  FDGTBL-1,X
+L7B6A:  STA  INITLS-1,X
+L7B6D:  LDA  FDGTBL,X
+L7B70:  STA  INITLS,X
+L7B73:  INY
+L7B74:  DEX
+L7B75:  DEX
+L7B76:  DEX
+L7B77:  BPL  PWRON_20
+L7B79:  JSR  BATINT                 ;C INIT FOR LOGO
+L7B7C:  JMP  MAIN
+
+FDGTBL:
+L7B7F:  .byte $1E, $1C, $38, $2E, $34, $24, $28, $1E ;.ASCVG <EDRMPHJEDDESTKEVKBEL HADORRGJR >
+L7B87:  .byte $1C, $1C, $1E, $3A, $3C, $2A, $1E, $40
+L7B8F:  .byte $2A, $18, $1E, $2C, $00, $24, $16, $1C
+L7B97:  .byte $32, $38, $38, $22, $28, $38
+
+CHKS7:
+L7B9D:  .byte $E3
+
+;------------------------------------------------------------------------------
+; DIGT2S - DISPLAY DIGITS
+;   DIGITS - DISPLAY 2Y DIGIT NUMBERS
+;   ENTRY (C)=CARRY SET FOR ZERO SUPPRESSION
+;   (A)=ADDRESS OF (Y) ZERO PAGE LOCATIONS CONTAINING NUMBER (LSB TO MSB)
+;   (Y)=NUMBER OF ZERO PAGE LOCATIONS TO USE (1 TO 256).
+;------------------------------------------------------------------------------
+DIGT2S:
+L7B9E:  LDY  #$02
+
+;------------------------------------------------------------------------------
+; DIGTYS - DISPLAY 2 DIGITS  (comment at the call)
+;------------------------------------------------------------------------------
+DIGTYS:
+L7BA0:  SEC
+
+DIGITS:
+L7BA1:  PHP                         ;SAVE INPUT PARAMETERS
+L7BA2:  DEY
+L7BA3:  STY  TEMP1+1
+L7BA5:  CLC
+L7BA6:  ADC  TEMP1+1
+L7BA8:  PLP
+L7BA9:  TAX                         ;MSB OF DIGITS
+
+DIGITS_10:
+L7BAA:  PHP
+L7BAB:  STX  TEMP1                  ;SAVE DIGIT ZP OFFSET
+L7BAD:  LDA  $00,X
+L7BAF:  LSR
+L7BB0:  LSR
+L7BB1:  LSR
+L7BB2:  LSR
+L7BB3:  PLP
+L7BB4:  JSR  VGHEXZ                 ;FIRST DIGIT
+L7BB7:  LDA  TEMP1+1
+L7BB9:  BNE  DIGITS_20
+L7BBB:  CLC                         ;DISPLAY LAST DIGIT (EVEN 0)
+
+DIGITS_20:
+L7BBC:  LDX  TEMP1
+L7BBE:  LDA  $00,X
+L7BC0:  JSR  VGHEXZ                 ;SECOND DIGIT
+L7BC3:  LDX  TEMP1
+L7BC5:  DEX
+L7BC6:  DEC  TEMP1+1
+L7BC8:  BPL  DIGITS_10              ;LOOP FOR EACH SET OF DIGITS
+L7BCA:  RTS
+
+;------------------------------------------------------------------------------
+; RAMTST - ZERO-PAGE TEST
+;------------------------------------------------------------------------------
+RAMTST:
+L7BCB:  LDX  #$11                   ;BEGINNING PATTERN
+L7BCD:  TXS                         ;S HOLDS PATTERN
+L7BCE:  TXA
+L7BCF:  STA  $00                    ;TEST CELL START @ 0
+L7BD1:  LDY  #$00
+
+RAMTST_2:
+L7BD3:  LDX  #$01                   ;ONE LESS COUNT BEFORE IT WRAPS
+
+RAMTST_3:
+L7BD5:  INY                         ;SCAN FORWARD
+L7BD6:  .byte $B9, $00, $00         ;LDA $0000,Y (forced absolute)  ZERO ?
+L7BD9:  BNE  RAMTST_5               ;NO - ERROR (HIGH BITS BAD)
+L7BDB:  INX                         ;CHK HOW FAR SCANNED
+L7BDC:  BNE  RAMTST_3               ;BRANCH - CONTINUE
+L7BDE:  TSX
+L7BDF:  TXA                         ;ACC = PATTERN
+L7BE0:  STA  WTCHDG                 ;WTCHDGDOG
+L7BE3:  INY                         ;POINT TO TEST CELL
+L7BE4:  .byte $59, $00, $00         ;EOR $0000,Y (forced absolute)  DOES IT HAVE PATTERN ?
+L7BE7:  BNE  RAMTST_5               ;N0 - ERROR (HIGH BITS BAD)
+L7BE9:  TXA                         ;ACC = PATTERN
+L7BEA:  LDX  #$00
+L7BEC:  STX  $00,Y                  ;ELSE - CLEAR CELL
+L7BEE:  INY                         ;POINT TO NEXT TEST CELL
+L7BEF:  BNE  RAMTST_4               ;IF PASS NOT COMPLETE
+L7BF1:  ASL                         ;ELSE SHIFT PATTERN
+L7BF2:  LDX  #$00                   ;IF DONE (0 = GOOD)
+L7BF4:  BCS  STOP0                  ;BRANCH - DONE (GOOD)
+
+RAMTST_4:
+L7BF6:  TAX                         ;PATTERN -> X
+L7BF7:  TXS                         ;-> S
+L7BF8:  STX  $00,Y                  ;-> NEXT TEST CELL
+L7BFA:  BNE  RAMTST_2               ;ALWAYS - REPEAT SCAN
+
+RAMTST_5:
+L7BFC:  TAX                         ;ANY HIGH BITS INDICATE BAD RAM
+
+RAMTST_7:
+L7BFD:  TXA
+L7BFE:  LDY  #$82                   ;ASSUME LOW NIBBLE IS GOOD
+L7C00:  AND  #$0F                   ;CHECK IT
+L7C02:  BEQ  RAMTST_8               ;BRANCH - LOW NIBBLE GOOD
+L7C04:  LDY  #$12                   ;ELSE - SET Y ACCORDINGLY
+
+RAMTST_8:
+L7C06:  TXA
+L7C07:  LDX  #$82                   ;ASSUME TOP NIBBLE IS GOOD
+L7C09:  AND  #$F0                   ;CHECK IT
+L7C0B:  BEQ  RAMTST_9               ;BRANCH - TOP NIBBLE GOOD
+L7C0D:  LDX  #$12                   ;ELSE - SET X
+
+RAMTST_9:
+L7C0F:  TYA
+L7C10:  TXS                         ;S = HIGH NIBBLE STATUS
+L7C11:  TAX                         ;X = LOW
+
+RT_LP:
+L7C12:  STX  POKEY                  ;NOISE = LOWER NIBBLE STATUS
+L7C15:  LDX  #$A8
+L7C17:  STX  POKEY+1
+L7C1A:  LDY  #$0C                   ;Y = HIGH BYTE OF COUNTER
+
+RT_LP_10:
+L7C1C:  LDX  #$64                   ;X = LOW BYTE OF COUNTER
+
+RT_LP_11:
+L7C1E:  BIT  HALT
+L7C21:  BMI  RT_LP_11               ;BIT 7 (SIGN FLAG) OF HALT = 3000 HZ SQUARE WAVE
+
+RT_LP_12:
+L7C23:  BIT  HALT
+L7C26:  BPL  RT_LP_12
+L7C28:  STA  WTCHDG
+L7C2B:  DEX
+L7C2C:  BNE  RT_LP_11               ;INNER LOOP 255 * 333 US = 85 MS
+L7C2E:  CPY  #$05
+L7C30:  BNE  RT_LP_13
+L7C32:  STX  POKEY+1                ;CLR NOISE
+
+RT_LP_13:
+L7C35:  DEY
+L7C36:  BNE  RT_LP_10               ;OUTER LOOP 8 * 85 MS = 580 MS
+L7C38:  LSR                         ;TEST SIGN
+L7C39:  BCS  RT_LP_14               ;DONE
+L7C3B:  TSX
+L7C3C:  BNE  RT_LP                  ;ALWAYS
+
+RT_LP_14:
+L7C3E:  STA  WTCHDG                 ;WTCHDGDOG
+L7C41:  JMP  RT_LP_14               ;LOCKUP - BAD ZP RAM
+
+;------------------------------------------------------------------------------
+; STOP0 - [note] RAMTST's success exit (the shift-pattern test came back clean): reinitialise the stack pointer
+;   to $7F and zero all of zero page before continuing into the VG RAM test.
+;------------------------------------------------------------------------------
+STOP0:
+L7C44:  LDX  #$7F
+L7C46:  TXS                         ;INITIALIZE STACK (USED IN ROM TESTS)
+L7C47:  LDX  #$00
+L7C49:  TXA
+
+STOP0_10:
+L7C4A:  STA  $00,X                  ;ZERO ZERO-PAGE
+L7C4C:  INX
+L7C4D:  BNE  STOP0_10
+
+;.SBTTL VG RAM TEST
+
+STEST1:
+;VECTOR GEN RAM TEST
+L7C4F:  TAY
+L7C50:  LDA  #$01
+
+STEST1_5:
+L7C52:  STA  $01                    ;START @ PAGE 1 (NY,0)
+
+STEST1_10:
+L7C54:  LDX  #$11                   ;STARTING PATTERN
+L7C56:  LDA  ($00),Y                ;D IF BAD CELL
+L7C58:  BNE  STEST1_20
+
+STEST1_15:
+L7C5A:  TXA
+L7C5B:  STA  ($00),Y                ;WRITE
+L7C5D:  EOR  ($00),Y                ;AND COMPARE
+L7C5F:  BNE  STEST1_20              ;ERROR
+L7C61:  TXA
+L7C62:  ASL
+L7C63:  TAX
+L7C64:  BCC  STEST1_15              ;NEXT PATTERN
+L7C66:  INY
+L7C67:  BNE  STEST1_10              ;NEXT LOCATION
+L7C69:  STA  WTCHDG                 ;MUZZLE THAT BEAST
+L7C6C:  INC  $01
+L7C6E:  LDX  $01
+L7C70:  CPX  #$04                   ;PAGES 1 TO 3
+L7C72:  BCC  STEST1_10              ;CHECK NEXT PAGE
+L7C74:  LDA  #VECRAM/$100
+L7C76:  CPX  #VECRAM/$100
+L7C78:  BCC  STEST1_5               ;BEGIN NEXT @ 2000
+L7C7A:  CPX  #[VECRAM/$100]+$10
+L7C7C:  BCC  STEST1_10              ;CHECK UP TO 2FFF
+L7C7E:  JMP  STEST3                 ;RAM IS GOOD
+
+STEST1_20:
+L7C81:  LDX  $01                    ;X = MSB (ADDRESS) ACC=BAD PATTERN
+L7C83:  CPX  #VECRAM/$100
+L7C85:  STA  $02
+L7C87:  BCC  STEST1_30
+L7C89:  TXA
+L7C8A:  SBC  #[VECRAM/$100]-4
+
+STEST1_30:
+L7C8C:  LSR
+L7C8D:  LSR
+L7C8E:  AND  #$07
+L7C90:  TAY                         ;Y = # OF 1K BLOCK BAD
+L7C91:  LDA  $02
+
+STEST2:
+L7C93:  STY  $00                    ;0 = BAD RAM #
+L7C95:  STA  $01                    ;1 = BAD BITS
+
+STEST2_5:
+L7C97:  LDA  #$01
+L7C99:  STA  $02
+
+STEST2_10:
+L7C9B:  LDX  #$A8
+L7C9D:  LDY  #$82                   ;ASSUME GOOD RAM
+L7C9F:  LDA  $00
+L7CA1:  BNE  STEST2_30              ;IT IS
+L7CA3:  LDA  $01
+L7CA5:  AND  #$0F                   ;LOW NIBBLE
+L7CA7:  BEQ  STEST2_30              ;GOOD
+
+STEST2_20:
+L7CA9:  LDY  #$12                   ;BAD
+
+STEST2_30:
+L7CAB:  STX  POKEY+1                ;TONE/VOLUME
+L7CAE:  STY  POKEY                  ;FREQUENCY
+L7CB1:  LDA  #$09                   ;BAD
+L7CB3:  CPY  #$12
+L7CB5:  BEQ  STEST2_35              ;YES
+L7CB7:  LDA  #$01
+
+STEST2_35:
+L7CB9:  TAY
+L7CBA:  LDX  #$00
+
+STEST2_40:
+L7CBC:  BIT  HALT
+L7CBF:  BMI  STEST2_40
+
+STEST2_42:
+L7CC1:  BIT  HALT
+L7CC4:  BPL  STEST2_42
+L7CC6:  STA  WTCHDG                 ;NO WTCHDGIN' DOG
+L7CC9:  DEX
+L7CCA:  BNE  STEST2_40              ;COUNT 256/3000 OF A SECOND
+L7CCC:  DEY
+L7CCD:  BNE  STEST2_40
+L7CCF:  STX  POKEY+1                ;CLR SOUND
+L7CD2:  LDY  #$09
+
+STEST2_50:
+L7CD4:  BIT  HALT
+L7CD7:  BMI  STEST2_50
+
+STEST2_52:
+L7CD9:  BIT  HALT
+L7CDC:  BPL  STEST2_52
+L7CDE:  STA  WTCHDG                 ;NO WTCHDGDOG
+L7CE1:  DEX
+L7CE2:  BNE  STEST2_50              ;256/3000
+L7CE4:  DEY
+L7CE5:  BNE  STEST2_50
+L7CE7:  LDA  $00
+L7CE9:  BNE  STEST2_60
+L7CEB:  LDA  $01
+L7CED:  LSR
+L7CEE:  LSR
+L7CEF:  LSR
+L7CF0:  LSR
+L7CF1:  STA  $01
+
+STEST2_60:
+L7CF3:  DEC  $02
+L7CF5:  BEQ  STEST2_10
+L7CF7:  DEC  $00
+L7CF9:  BPL  STEST2_5               ;ALWAYS
+
+STOP1:
+L7CFB:  STA  WTCHDG                 ;NO WTCHDGDOG
+L7CFE:  JMP  STOP1
+
+;------------------------------------------------------------------------------
+; STEST3 - ROM TEST
+;   ROM TEST
+;------------------------------------------------------------------------------
+STEST3:
+L7D01:  LDA  #$00                   ;EOR CKSUM ROMS
+L7D03:  TAY
+L7D04:  TAX
+L7D05:  STA  TEMP1
+L7D07:  LDA  #VGROM/$100
+
+STEST3_5:
+L7D09:  STA  TEMP1+1
+L7D0B:  LDA  #$08
+L7D0D:  STA  TEMP2                  ;8 PAGES
+L7D0F:  LDA  #$FF                   ;CKSUMS SHOULD BE FF
+
+STEST3_10:
+L7D11:  EOR  (TEMP1),Y
+L7D13:  INY
+L7D14:  BNE  STEST3_10
+L7D16:  INC  TEMP1+1
+L7D18:  STA  WTCHDG                 ;NO WTCHDGDOG
+L7D1B:  DEC  TEMP2
+L7D1D:  BNE  STEST3_10              ;8 PAGES / ROM
+L7D1F:  STA  PNTTBL,X               ;CKSUMS @ TEMP3
+L7D21:  INX
+L7D22:  LDA  TEMP1+1
+L7D24:  CMP  #[VGROM/$100]+$10      ;4K OF VGROM
+L7D26:  BNE  STEST3_15
+L7D28:  LDA  #<[PRGROM/$100]
+L7D2A:  STA  TEMP1+1
+
+STEST3_15:
+L7D2C:  CMP  #$80
+L7D2E:  BCC  STEST3_5
+L7D30:  LDX  #$FF                   ;C ASSUME STEST
+L7D32:  LDA  HALT                   ;D IF NOT DIAG PRESSED
+L7D35:  AND  #$20
+L7D37:  BNE  STEST3_20
+L7D39:  INX                         ;C START AT DIAG
+
+STEST3_20:
+L7D3A:  STX  TEMP3                  ;C SET STEP #
+
+;.SBTTL PROGRAM
+
+MBDIAG:
+;DIAGNOSTIC 2901 "MATH-BOX"
+;$STAT=1 (D7(HIGH)=BUSY)
+;$STAT=2 (D6(LOW)=BUSY)
+;$STAT=3 (D6(HIGH)=BUSY)
+L7D3C:  LDX  #$00                   ;BEGIN @ THE BEGINNING
+
+MBDIAG_10:
+L7D3E:  CLC
+L7D3F:  LDA  TESDAT,X               ;GET TEST ADDR. & SPEC
+L7D42:  BMI  TDONE
+L7D44:  AND  #$1F                   ;ISOLATE ADDR
+L7D46:  TAY
+L7D47:  LDA  TESDAT+1,X             ;AND WHAT TO STORE
+L7D4A:  STA  MBOXIN,Y
+L7D4D:  LDY  #$08                   ;PREPARE FOR WAIT
+
+MBDIAG_1:
+L7D4F:  BIT  MBSTAT                 ;LOOP ON "BUSY"
+L7D52:  BPL  MBDIAG_2
+L7D54:  DEY
+L7D55:  BPL  MBDIAG_1               ;BUT ONLY SO LONG
+L7D57:  LDA  #$54                   ;(src: LDA I,'T)  T FOR TEXAS, T FOR TIMEOUT TOO
+L7D59:  BNE  MBDIAG_7               ;ALWAYS
+
+MBDIAG_2:
+L7D5B:  LDA  TESDAT,X               ;GET "SPEC" BYTE
+L7D5E:  ASL                         ;D6 -> SIGN
+L7D5F:  TAY                         ;SAVE
+L7D60:  BPL  MBDIAG_4               ;IF +, CHECK LOW BYTE
+L7D62:  LDA  YLOW
+L7D65:  CMP  TESDAT+2,X
+L7D68:  BEQ  MBDIAG_3
+L7D6A:  LDA  #$4C                   ;(src: LDA I,'L)  LOW BYTE ERR
+L7D6C:  BNE  MBDIAG_7               ;ALWAYS
+
+MBDIAG_3:
+L7D6E:  INX                         ;SKIP OVER LOW CMP BYTE
+
+MBDIAG_4:
+L7D6F:  TYA                         ;GET SPEC BACK
+L7D70:  ASL                         ;D5 -> SIGN
+L7D71:  BPL  MBDIAG_5               ;SKIP IF +
+L7D73:  LDA  YHIGH                  ;CHECK HIGH BYTE IF -
+L7D76:  CMP  TESDAT+2,X
+L7D79:  BNE  MBDIAG_6
+L7D7B:  INX                         ;SKIP OVER HIGH CMP BYTE
+
+MBDIAG_5:
+L7D7C:  INX                         ;SKIP SPEC
+L7D7D:  INX                         ;SKIP INPUT
+L7D7E:  JMP  MBDIAG_10
+
+MBDIAG_6:
+L7D81:  LDA  #$48                   ;(src: LDA I,'H)  HIGH BYTE ERR
+
+MBDIAG_7:
+L7D83:  SEC                         ;ERROR CODE
+
+TDONE:
+L7D84:  JMP  EOMBT
+
+;.SBTTL TEST DATA
+
+TESDAT:
+L7D87:  .byte $40, $00, $00         ;@ 0, STORE 0, CHECK LOW=0
+L7D8A:  .byte $61, $7F              ;@ 1, STORE 7F, CHECK BOTH
+L7D8C:  .word $7F00
+L7D8E:  .byte $42, $00, $00
+L7D91:  .byte $63, $00, $00, $00    ;2,3:=0000
+L7D95:  .byte $44, $00, $00
+L7D98:  .byte $65, $00, $00, $00    ;4,5:=0000
+L7D9C:  .byte $46, $00, $00
+L7D9F:  .byte $67, $00, $00, $00    ;6,7:=0000
+L7DA3:  .byte $48, $00, $00
+L7DA6:  .byte $69, $01, $00, $01    ;8,9:=0100
+L7DAA:  .byte $4A, $80, $80
+L7DAD:  .byte $6B, $00              ;A,B:=0080, RESULT BELOW
+L7DAF:  .word $007F                 ;FIRST MULT=7F
+L7DB1:  .byte $6C, $10, $10, $00    ;SET N, CHECK BOTH
+L7DB5:  .byte $72, $00, $3F, $00    ;2ND MULT=3F (HIGH)
+L7DB9:  .byte $78, $00, $00, $80    ;2ND MULT=8000 (LOW)
+L7DBD:  .byte $79, $00, $3F, $00    ;CHECK HIGH AGAIN
+L7DC1:  .byte $77, $00, $7F, $00    ;CHECK X PRIME AGAIN
+L7DC5:  .byte $73, $00, $00, $80    ;DIV=8000
+;TRY SOME DIFFERENT VALUES
+L7DC9:  .byte $40, $00, $00
+L7DCC:  .byte $61, $5A, $00, $5A    ;A=5A00
+L7DD0:  .byte $42, $00, $00
+L7DD3:  .byte $63, $A6, $00, $A6    ;B=A600
+L7DD7:  .byte $44, $FF, $FF
+L7DDA:  .byte $65, $7F, $FF, $7F    ;E=7FFF
+L7DDE:  .byte $46, $FF, $FF
+L7DE1:  .byte $67, $7F, $FF, $7F    ;E=7FFF
+L7DE5:  .byte $48, $00, $00
+L7DE8:  .byte $69, $01, $00, $01    ;X=100
+L7DEC:  .byte $4A, $00, $00
+L7DEF:  .byte $6B, $01, $B4, $A6    ;Y=100, RESULT=A6B4
+L7DF3:  .byte $FF                   ;END OF TEST
+
+;------------------------------------------------------------------------------
+; EOMBT - ROM TEST
+;------------------------------------------------------------------------------
+EOMBT:
+L7DF4:  BCS  TESDAT_30              ;ERROR IN MATHBOX
+L7DF6:  LDA  #$00
+
+TESDAT_30:
+L7DF8:  STA  TEMP3+1                ;MB TEST RESULT
+L7DFA:  LDA  PNTTBL
+L7DFC:  BEQ  TESDAT_40              ;VGROM IS OK
+L7DFE:  LDA  #$F0                   ;ELSE SOUND
+L7E00:  LDX  #$A2
+L7E02:  STA  POKEY
+L7E05:  STX  POKEY+1
+
+TESDAT_40:
+L7E08:  LDA  #$02
+L7E0A:  STA  VGSIZE                 ;SCALE FACTOR
+L7E0C:  LDA  #$00
+L7E0E:  STA  VGBRIT                 ;CLR BRIGHTNESS
+
+STEST4:
+;(SAVE0) = SWITCH CLOSURES
+;(TEMP2,+1) = SCRATCH
+;(PNTTBL,+6) = 7 CHKSUMS FOR ROMS
+;(TEMP3) = DIAG STEP #
+;(TEMP3+1) = MB STATUS (0 = NO ERRORS, ELSE 'T,'L, OR 'H)
+;(SAVE0&SAVE1)=DEBOUNCE FIRE (DIAGNOSTICS)
+L7E10:  LDX  #$28                   ;SET FOR 16MS BEST CASE
+
+STEST4_5:
+L7E12:  BIT  HALT
+L7E15:  BPL  STEST4_5
+
+STEST4_7:
+L7E17:  BIT  HALT
+L7E1A:  BMI  STEST4_7
+L7E1C:  DEX
+L7E1D:  BPL  STEST4_5               ;WAIT FOR COUNT
+
+STEST4_10:
+L7E1F:  BIT  HALT
+L7E22:  BVC  STEST4_10              ;IF NO HALT, WTCHDGDOG WILL RESET
+L7E24:  STA  WTCHDG                 ;MUZZLE THE DOG
+L7E27:  LDA  #VECRAM&$FF
+L7E29:  STA  VGLIST
+L7E2B:  LDA  #[VECRAM&$FF00]/$100
+L7E2D:  STA  VGLIST+1
+L7E2F:  BIT  TEMP3                  ;D IF NOT IN DIAGNOSTIC
+L7E31:  BMI  STEST6
+L7E33:  JSR  VGCNTR                 ;C OPEN WINDOW
+L7E36:  LDA  #$81
+L7E38:  TAX
+L7E39:  LDY  #$00
+L7E3B:  JSR  VGVTR
+L7E3E:  LDA  #$00
+L7E40:  JSR  VGSTAT
+L7E43:  JSR  VGCNTR
+L7E46:  LDA  #$7F
+L7E48:  TAX
+L7E49:  LDY  #$00
+L7E4B:  JSR  VGVTR
+L7E4E:  LDA  #$02
+L7E50:  JSR  VGSTAT
+L7E53:  LDX  TEMP3                  ;1 TO 4
+
+STEST4_20:
+L7E55:  LDY  DIAGS,X                ;LENGTH OF TEST
+L7E58:  LDA  #$20
+L7E5A:  STA  (VGLIST),Y             ;ADD HALT @ END
+L7E5C:  DEY
+L7E5D:  DEY
+
+STEST4_30:
+L7E5E:  LDA  DIATST,Y               ;COPY IN TEST PATTERN
+L7E61:  STA  (VGLIST),Y
+L7E63:  DEY
+L7E64:  BPL  STEST4_30
+L7E66:  JMP  STEST7                 ;CHECK SELF TEST SWITCH
+
+;------------------------------------------------------------------------------
+; STEST6 - [note] STEST4 when TEMP3's sign bit is set (plain self-test mode, not the diagnostic-step mode entered
+;   by holding the diag switch at power-on): skip the per-step DIATST vector test pattern and
+;   JSRL the cross-hatch picture HATCH.
+;------------------------------------------------------------------------------
+STEST6:
+L7E69:  LDA  #>HATCH                ;LAH HATCH
+L7E6B:  LDX  #<HATCH                ;LXL HATCH
+L7E6D:  JSR  VGJSRL
+L7E70:  JSR  VGCNTR                 ;CENTER BEAM
+L7E73:  LDA  #$82                   ;(src: LDA I,-504./4)
+L7E75:  LDX  #$A7                   ;(src: LDX I,-358./4)
+L7E77:  JSR  VGVTR1                 ;POSITION BEAM
+L7E7A:  LDA  #>VGMSGA               ;LAH VGMSGA
+L7E7C:  LDX  #<VGMSGA               ;LXL VGMSGA
+L7E7E:  JSR  VGJSRL                 ;DISPLAY ALPHABET
+L7E81:  JSR  VGCNTR                 ;CENTER BEAM
+L7E84:  LDA  #$D3                   ;(src: LDA I,-182./4)
+L7E86:  LDX  #$13                   ;(src: LDX I,78./4)
+L7E88:  JSR  VGVTR1                 ;POSITION BEAM
+L7E8B:  LDX  #$0F
+L7E8D:  LDA  OPTION
+L7E90:  EOR  #$FF
+L7E92:  STA  TEMP2+1
+L7E94:  LDA  OPTON2
+L7E97:  EOR  #$FF
+
+STEST6_10:
+L7E99:  PHA
+L7E9A:  STX  TEMP2
+L7E9C:  AND  #$01
+L7E9E:  JSR  VGHEX                  ;DISPLAY 0 OR 1
+L7EA1:  LDX  TEMP2
+L7EA3:  LSR  TEMP2+1
+L7EA5:  PLA
+L7EA6:  ROR
+L7EA7:  DEX
+L7EA8:  BPL  STEST6_10              ;DO ALL 16 OPTION SWITCHES
+L7EAA:  JSR  VGCNTR                 ;CENTER BEAM
+L7EAD:  LDA  #$FB                   ;(src: LDA I,-20./4)
+L7EAF:  LDX  #$1D                   ;(src: LDX I,116./4)
+L7EB1:  JSR  VGVTR1                 ;POSITION BEAM
+L7EB4:  LDA  #$01
+L7EB6:  JSR  VGHEX                  ;1 FOR LEFT COIN MECH
+L7EB9:  LDA  OPTON2
+L7EBC:  AND  #$10
+L7EBE:  LSR
+L7EBF:  LSR
+L7EC0:  LSR
+L7EC1:  LSR                         ;0 OR 1
+L7EC2:  ADC  #$01                   ;1 OR 2
+L7EC4:  JSR  VGHEX                  ;PUT CENTER MECH VALUE
+L7EC7:  LDA  OPTON2
+L7ECA:  AND  #$0C
+L7ECC:  LSR
+L7ECD:  LSR
+L7ECE:  TAX
+L7ECF:  LDA  STEST8,X
+L7ED2:  JSR  VGHEX                  ;DOLLAR MECH VALUE
+L7ED5:  LDX  #$16                   ;(src: LDX I,88./4)
+L7ED7:  STX  TEMP2+1                ;STARTING Y VALUE CHECK SUMS
+L7ED9:  LDX  #$07
+
+STEST6_20:
+L7EDB:  LDA  PNTTBL,X
+L7EDD:  BEQ  STEST6_30
+L7EDF:  STA  $00
+L7EE1:  STX  TEMP2                  ;SAVE CHKSUM #
+L7EE3:  JSR  VGCNTR                 ;CENTER BEAM
+L7EE6:  LDX  TEMP2+1
+L7EE8:  TXA
+L7EE9:  SEC
+L7EEA:  SBC  #$08                   ;32. BELOW CURRENT LINE
+L7EEC:  STA  TEMP2+1
+L7EEE:  LDA  #$A0                   ;(src: LDA I,-384./4)
+L7EF0:  JSR  VGVTR1                 ;POSITION BEAM
+L7EF3:  LDA  TEMP2
+L7EF5:  JSR  VGHEX                  ;ROM #
+L7EF8:  LDA  #$06                   ;(src: LDA I,24./4)
+L7EFA:  LDX  #$00
+L7EFC:  JSR  VGVTR1
+L7EFF:  LDA  #$00
+L7F01:  LDY  #$01
+L7F03:  JSR  DIGTYS                 ;DISPLAY 2 DIGITS
+L7F06:  LDX  TEMP2
+
+STEST6_30:
+L7F08:  DEX
+L7F09:  BPL  STEST6_20              ;LOOP THROUGH ALL ROMS
+L7F0B:  JSR  VGCNTR                 ;CENTER BEAM
+L7F0E:  LDA  #$60                   ;(src: LDA I,384./4)
+L7F10:  LDX  #$16                   ;(src: LDX I,88./4)
+L7F12:  JSR  VGVTR1                 ;POSITION BEAM
+L7F15:  LDA  TEMP3+1
+L7F17:  BEQ  STEST6_40              ;NO MB ERRORS
+L7F19:  SEC
+L7F1A:  SBC  #$36                   ;A IS 11. IN VGMSGA TABLE
+L7F1C:  ASL
+L7F1D:  TAY
+L7F1E:  LDA  VGMSGA,Y
+L7F21:  LDX  VGMSGA+1,Y
+L7F24:  JSR  VGADD2                 ;PUT UP ERROR CODE
+
+STEST6_40:
+L7F27:  JSR  VGHALT                 ;& HALT
+
+;.SBTTL SWITCH TEST
+
+STEST7:
+;FALL THRU TO SWITCH TEST
+L7F2A:  STA  GOADD                  ;C START VG
+L7F2D:  BIT  TEMP3                  ;D IF IN DIAG
+L7F2F:  BPL  STEST7_60
+L7F31:  JSR  DIAGDB                 ;D IF DIAG
+L7F34:  BNE  STEST7_65
+L7F36:  STA  POTGO
+L7F39:  LDY  #$00
+L7F3B:  LDA  ALLPOT
+L7F3E:  AND  #$7F
+
+STEST7_10:
+L7F40:  LSR
+L7F41:  BCC  STEST7_15
+L7F43:  INY
+
+STEST7_15:
+L7F44:  ORA  #$00
+L7F46:  BNE  STEST7_10
+L7F48:  LDA  HALT
+L7F4B:  AND  #$0F
+L7F4D:  EOR  #$0F
+
+STEST7_20:
+L7F4F:  LSR
+L7F50:  BCC  STEST7_25
+L7F52:  INY
+
+STEST7_25:
+L7F53:  ORA  #$00
+L7F55:  BNE  STEST7_20
+L7F57:  CPY  SAVE0
+L7F59:  BEQ  STEST7_30              ;D IF NO CHANGE
+L7F5B:  LDA  #$A7
+L7F5D:  BCC  STEST7_35              ;D IF ONE WENT ON
+L7F5F:  LDX  #$80                   ;C INDICATE ONE OFF
+L7F61:  BNE  STEST7_40
+
+STEST7_30:
+L7F63:  LDA  #$00                   ;C NO SOUND
+L7F65:  BEQ  STEST7_40
+
+STEST7_35:
+L7F67:  LDX  #$20                   ;C INDICATE ONE ON
+
+STEST7_40:
+L7F69:  STY  SAVE0                  ;C SAVE COUNT
+L7F6B:  STA  CHAN2V                 ;C SOUND!
+L7F6E:  STX  CHAN2F
+L7F71:  LDA  HALT
+L7F74:  AND  #ST_BIT
+L7F76:  BNE  STEST7_50
+
+STEST7_45:
+L7F78:  JMP  MBDIAG
+
+STEST7_50:
+L7F7B:  JMP  PWRON
+
+STEST7_60:
+L7F7E:  JSR  DIAGDB
+L7F81:  BEQ  STEST7_45              ;D IF NOT PUSHED
+
+STEST7_65:
+L7F83:  INC  TEMP3                  ;C NEXT DIAG STEP
+L7F85:  LDA  TEMP3
+L7F87:  AND  #$FC
+L7F89:  BEQ  STEST7_45
+
+STEST7_70:
+L7F8B:  LDA  #$00                   ;C CLOSE WINDOW
+L7F8D:  STA  WTCHDG
+L7F90:  STA  SOUND
+L7F93:  STA  MBOXIN                 ;C CLOCK IT
+L7F96:  STA  POKEY                  ;C HIT ALL OTHER DECODES
+L7F99:  LDA  MSTAT
+L7F9C:  LDA  MOUTHI
+L7F9F:  LDA  MOUTLO
+L7FA2:  LDA  #$01
+L7FA4:  STA  SOUND                  ;C OPEN WINDOW
+L7FA7:  LDX  #$1F
+L7FA9:  CLC
+
+STEST7_75:
+L7FAA:  STA  MBOXIN,X               ;C SCAN
+L7FAD:  ROL
+L7FAE:  DEX
+L7FAF:  BPL  STEST7_75
+L7FB1:  JSR  DIAGDB                 ;D IF NOT PUSHED
+L7FB4:  BEQ  STEST7_70
+L7FB6:  JMP  PWRON
+
+;------------------------------------------------------------------------------
+; DIAGDB - D IF DIAG  (comment at the call)
+;   D IF NOT PUSHED  (another call)
+;------------------------------------------------------------------------------
+DIAGDB:
+L7FB9:  LDA  HALT                   ;C CATCH EDGE
+L7FBC:  TAY
+L7FBD:  EOR  SAVE1
+L7FBF:  AND  SAVE1
+L7FC1:  STY  SAVE1
+L7FC3:  AND  #$20
+L7FC5:  RTS
+
+STEST8:
+L7FC6:  .byte $01, $04, $05, $06    ;DOLLAR MECH MULTIPLIERS
+
+;.SBTTL VGDIAG TEST ROUTINES
+
+DIAGS:
+L7FCA:  .byte $0D, $11, $17, $2D
+
+DIATST:
+L7FCE:  .word $8040                 ;CNTR
+L7FD0:  .word $1E80, $1E00          ;VCTR -512,-384,0
+L7FD4:  .word $02FF, $E3FF          ;VCTR 1023,767,.DIAG
+L7FD8:  .word $8040                 ;CNTR
+L7FDA:  .word $510F                 ;VCTR 30,-30,0
+L7FDC:  .word $4FF1                 ;VCTR -30,30,.DIAG
+L7FDE:  .word $E012                 ;JMPL 1$-DIATST+16  JMPL TEST
+L7FE0:  .word $2000                 ;HALT  (FAILURE=HALT)
+
+DIATST_1:
+L7FE2:  .word $4FF1                 ;VCTR -30,30,.DIAG
+L7FE4:  .word $A016                 ;JSRL 2$-DIATST+16  JSRL TEST
+L7FE6:  .word $51E0                 ;VCTR 0,-30,.DIAG
+L7FE8:  .word $2000                 ;HALT
+
+DIATST_2:
+L7FEA:  .word $A018                 ;JSRL 3$-DIATST+16
+L7FEC:  .word $C000                 ;RTSL
+
+DIATST_3:
+L7FEE:  .word $A01A                 ;JSRL 4$-DIATST+16
+L7FF0:  .word $C000                 ;RTSL
+
+DIATST_4:
+L7FF2:  .word $A01C                 ;JSRL 5$-DIATST+16
+L7FF4:  .word $C000                 ;RTSL
+
+DIATST_5:
+L7FF6:  .word $40EF                 ;VCTR 30,0,.DIAG
+L7FF8:  .word $C000                 ;RTSL
+L7FFA:  .word NMI, PWRON, PWRON
+
+;==============================================================================
+; $8000-$FFFF: no memory of its own anywhere in the machine.  The 6502 only
+; decodes address lines A0-A14 (15 bits): every device - this program ROM, the
+; vector ROM/RAM, the hardware registers and the RAM - repeats with A15 ignored,
+; so $8000-$FFFF is an exact mirror of $0000-$7FFF.  The 6502 vectors read at
+; $FFFA-$FFFF are therefore the .VCTRS words at $7FFA above:
+;   NMI $FFFA -> NMI ($558F)   RESET $FFFC -> PWRON ($7ACC)   IRQ $FFFE -> PWRON
+; (BZSTST's .VCTRS statement gives the IRQ vector the same target as RESET; the
+; game does not otherwise enable IRQs - NMI is the vector-generator interrupt).
+;==============================================================================

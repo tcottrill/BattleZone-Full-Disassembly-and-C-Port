@@ -1,0 +1,51 @@
+# coin_start.txt - Battlezone oracle scenario: coin 1, then START, from
+# attract mode.  Exercises MOOLAH (the coin routine, COIN65.MAC) crediting a
+# coin and the NMI's start-button handler (BZONE.MAC ~$564A) consuming it -
+# including the TRAP1 security-checksum deduction from $$CRDT documented in
+# MAINLINE_NOTES.md ("A trap worth knowing about").
+#
+# PLAN.md M1 extended this scenario (was: coin + start only) so a game is
+# actually started and the tank moves and fires, giving lockstep's VGUT
+# coverage report something closer to a real play session (mountains/radar/
+# explosion pictures use VGJSRL/VGSCAL/VGVTR2 well beyond what attract mode's
+# demo alone exercises) - see NOTES_m1.md "Scenario coverage".  ALLPOT bits
+# (HARDWARE_NOTES.md "IN3"): rt_down b0, rt_up b1, lt_down b2, lt_up b3,
+# fire b4, start1 b5, start2 b6; both treads forward = drive straight, one
+# tread only = turn.
+#
+# Held several passes each so COIN65's own debounce timers ($CNSTT/$PSTSL,
+# COIN65.MAC) see a clean transition rather than a single-pass pulse, and so
+# a drive/turn/fire input is actually visible to MAIN's polling instead of a
+# one-pass pulse a slower game loop could miss.
+#
+# Syntax: "PASS PORT [VALUE]", '#' comments, non-decreasing PASS order - see
+# the header of tests/refrun.c.
+
+5  coin1 1
+8  coin1 0
+
+20 start1 1
+23 start1 0
+
+# drive straight ahead for a while
+40  rt_up 1
+40  lt_up 1
+90  rt_up 0
+90  lt_up 0
+
+# turn (right tread only)
+100 rt_up 1
+140 rt_up 0
+
+# fire
+150 fire 1
+154 fire 0
+
+# drive again and fire once more, so a second shot/explosion cycle has a
+# chance to run its course
+170 rt_up 1
+170 lt_up 1
+220 rt_up 0
+220 lt_up 0
+230 fire 1
+234 fire 0
