@@ -756,7 +756,7 @@ static void run_moolah(void) { moolah(); }
 static void run_nmi(void)    { nmi(); }
 
 /* ---- maths (bzone_math.c) ----------------------------------------------- */
-static void run_wait(void)    { ret_a = wait(); }
+static void run_wait(void)    { ret_a = bz_mb_wait(); }
 static void run_rotate(void)  { rotate(); }
 static void run_rotpnt(void)  { ret_y = rotpnt(R.y); }
 static void run_pntput(void)  { pntput(R.x); }

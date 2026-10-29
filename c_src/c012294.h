@@ -33,6 +33,7 @@
 #ifndef AD_POKEY_H
 #define AD_POKEY_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 

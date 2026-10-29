@@ -13,6 +13,7 @@
 #ifndef STATE_H
 #define STATE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 typedef struct {

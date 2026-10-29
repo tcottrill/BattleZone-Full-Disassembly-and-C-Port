@@ -1360,7 +1360,7 @@ void dradar(void)
     hw_mb_write(0x11, 0x00);                        /* L6C01 STA YSTRT2 */
 
     {
-        uint8_t lo = wait();  /* L6C04 JSR WAIT - C SCALE RESLT */
+        uint8_t lo = bz_mb_wait();  /* L6C04 JSR WAIT - C SCALE RESLT */
         uint8_t hi;
         unsigned c;
 

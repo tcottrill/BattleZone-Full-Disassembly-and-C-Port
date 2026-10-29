@@ -37,7 +37,7 @@
  * function was last started.  No inputs.  Callers that also need the high
  * byte must read hw_mb_yhigh() themselves right after (CALLING_NOTES.md
  * section 3: WAIT hands back only the low byte). */
-uint8_t wait(void);
+uint8_t bz_mb_wait(void);
 
 /* ROTATE ($5946): scan the playfield/tank/robot/shell/saucer tables,
  * translate each centre point by the tank's own position and rotate it

@@ -75,6 +75,9 @@ static inline uint8_t lsr6502(uint8_t v, unsigned *c)
     return (uint8_t)(v >> 1);
 }
 
+#if defined(__GNUC__)
+__attribute__((unused))
+#endif
 static inline uint8_t ror6502(uint8_t v, unsigned *c)
 {
     unsigned cin = *c ? 1u : 0u;

@@ -86,7 +86,7 @@ static regs xtrap(uint8_t a, uint8_t x);
  * write's microcode to completion, so status is never busy - call the
  * seam once, do not spin (hw.h / PLAN.md).
  *----------------------------------------------------------------------*/
-uint8_t wait(void)
+uint8_t bz_mb_wait(void)
 {
     CYC(16);               /* L5B80-L5B88: BIT/BMI (not taken)/LDA/RTS */
     (void)hw_mb_status();  /* L5B80 BIT MSTAT / L5B83 BMI WAIT (never busy in the model) */
@@ -104,7 +104,7 @@ uint8_t rotpnt(uint8_t y)
     unsigned c;
 
     CYC(6);      /* L5B1F JSR */
-    a = wait();  /* L5B1F JSR WAIT: low byte of X' */
+    a = bz_mb_wait();  /* L5B1F JSR WAIT: low byte of X' */
     c = 0;
     a = asl8(a, &c);                          /* L5B22 ASL */
     X2 = a;                                   /* L5B23 STA X2 */
@@ -125,7 +125,7 @@ uint8_t rotpnt(uint8_t y)
     if (a >= 0x7B) { CYC(7); return y; }      /* L5B38 CMP #$7B / L5B3A BCS ROTPNT_20 - too far, discard */
     CYC(6);                                   /* L5B3C JSR */
 
-    a = wait();  /* L5B3C JSR WAIT: low byte of Y' */
+    a = bz_mb_wait();  /* L5B3C JSR WAIT: low byte of Y' */
     c = 0;
     a = asl8(a, &c);    /* L5B3F ASL */
     Y2 = a;             /* L5B40 STA Y2 */
@@ -524,7 +524,7 @@ void pntput(uint8_t x)
         hw_mb_write(MB_YSTRT2, cpu_rd((uint16_t)(tbl + y)));       y = (uint8_t)(y + 1);  /* L5DC1-L5DC6 - starts YHSP */
 
         {
-            uint8_t a = wait();  /* L5DC7 JSR WAIT */
+            uint8_t a = bz_mb_wait();  /* L5DC7 JSR WAIT */
             unsigned c = 0;
             uint8_t lo = adc6502((uint8_t)(~a), 0x01, &c, NULL);              /* L5DCA CLC/L5DCB EOR#$FF/L5DCD ADC#$01 */
             PNTTBL_AT(x) = lo;                                                /* L5DCF STA PNTTBL,X */
@@ -544,7 +544,7 @@ void pntput(uint8_t x)
         kludge();   /* L5DE8 JSR KLUDGE */
         CYC(6);     /* L5DEB JSR */
         {
-            uint8_t a = wait();                          /* L5DEB JSR WAIT */
+            uint8_t a = bz_mb_wait();                          /* L5DEB JSR WAIT */
             x = SAVE2;                                   /* L5DEE LDX SAVE2 */
             PNTTBL_AT((unsigned)x + 2) = a;              /* L5DF0 STA PNTTBL+2,X */
             PNTTBL_AT((unsigned)x + 3) = hw_mb_yhigh();  /* L5DF2/L5DF5 */
@@ -845,7 +845,7 @@ uint8_t track(void)
 
         /* TRACK_40 */
         {
-            uint8_t lo = wait();          /* L6894 JSR WAIT */
+            uint8_t lo = bz_mb_wait();          /* L6894 JSR WAIT */
             TEMP3 = lo;                   /* L6897 STA TEMP3 */
             uint8_t mhi = hw_mb_yhigh();  /* L6899 LDA MOUTHI */
             unsigned sc = 0;

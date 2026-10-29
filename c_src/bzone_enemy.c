@@ -475,7 +475,7 @@ SAUCMV_41:
  * frozen in bzone_game.h from an earlier draft this file adopts unchanged):
  * r.c = carry, r.a = 0 (nontank) or 0xFF (tank); carry clear = no collision.
  * CALLING_NOTES.md section 3 lists OBJOBJ as one of WAIT's callers, but the
- * actual code never calls WAIT (nor `wait()`) - it reads hw_mb_ylow/yhigh
+ * actual code never calls WAIT (nor `bz_mb_wait()`) - it reads hw_mb_ylow/yhigh
  * directly after a dummy delay read, the same idiom bzone_game.c's own
  * SHRTCK/SAUCHK/C_21S_ use without WAIT either; treated as a stale claim in
  * that note, not translated as a WAIT call (see NOTES_enemy.md). */

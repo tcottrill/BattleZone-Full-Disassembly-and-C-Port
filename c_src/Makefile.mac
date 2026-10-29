@@ -1,0 +1,46 @@
+# Makefile.mac - macOS (Apple Silicon) build of the Battlezone C port.
+#   make -f Makefile.mac            interactive binary   build/mac/bz_mac
+#   make -f Makefile.mac app        self-contained       build/mac/Battlezone.app
+#   make -f Makefile.mac check      headless play / self-test / prand regression
+#   make -f Makefile.mac lockstep   build + run the lockstep verifier
+# Needs: Xcode Command Line Tools + SDL2 (brew install sdl2).
+CC      ?= clang
+OUT     := build/mac
+CFLAGS  ?= -O2 -std=c11 -Wall -Wextra
+SDL_CFLAGS := $(shell sdl2-config --cflags 2>/dev/null)
+SDL_LIBS   := $(shell sdl2-config --libs 2>/dev/null)
+
+HW      := mathbox.c mbprom.c progrom.c vecrom.c avg.c
+MODULES := vgut.c bzsoun.c coin65.c bzone_nmi.c bzone_math.c bzone_game.c bzone_disp.c bzone_robot.c bzone_enemy.c
+CORE    := app_loop.c bzstst.c bz_sounds.c $(HW) state.c $(MODULES) c012294.c
+
+all: $(OUT)/bz_mac
+
+$(OUT)/bz_mac: platform/macos/plat_mac.c $(CORE) $(wildcard *.h platform/*.h)
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -I. $(SDL_CFLAGS) platform/macos/plat_mac.c $(CORE) $(SDL_LIBS) -o $@
+
+$(OUT)/bz_smoke: tests/bz_smoke.c $(CORE)
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) -I. tests/bz_smoke.c $(CORE) -o $@
+
+# self-contained bundle: samples in Resources, libSDL2 copied into Frameworks
+app: $(OUT)/bz_mac
+	@sh tools/mac_bundle.sh $(OUT)
+
+check: $(OUT)/bz_smoke
+	$(OUT)/bz_smoke 300 --play --svg $(OUT)/play.svg
+	$(OUT)/bz_smoke 300 --test --svg $(OUT)/self-test.svg
+	$(OUT)/bz_smoke --prand
+
+$(OUT)/lockstep: tests/lockstep.c tests/ref6502/ref6502.c $(HW) state.c $(MODULES) c012294.c
+	@mkdir -p $(OUT)
+	$(CC) -O2 -std=c11 -w -I. -Itests/ref6502 tests/lockstep.c tests/ref6502/ref6502.c $(HW) state.c $(MODULES) c012294.c -o $@
+
+lockstep: $(OUT)/lockstep
+	$(OUT)/lockstep
+
+clean:
+	rm -rf $(OUT)
+
+.PHONY: all app check lockstep clean
