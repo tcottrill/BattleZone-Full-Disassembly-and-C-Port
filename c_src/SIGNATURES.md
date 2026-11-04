@@ -1,5 +1,12 @@
 # C signatures of translated routines (shared contract between translation agents)
 
+> **Historical (2026-11-04).** This was the contract the original instruction-level
+> translation was written against. The port has since been rewritten as plain C
+> (`TRANSLATING.md`): `regs.h` is gone; the trig routines return `trig_sample`
+> (`bzone_math.h`) and OBJOBJ returns `object_contact` (`bzone_game.h`); SNDON is
+> `sndon(request)`. The headers are the current signatures; the
+> register language below describes the ROM side only.
+
 Several agents translate different modules at the same time. A routine's C signature is decided
 by the agent that OWNS the routine and registered here BEFORE its body is written, so callers in
 other modules can rely on it. Callers: if the routine you need is not here yet, derive the

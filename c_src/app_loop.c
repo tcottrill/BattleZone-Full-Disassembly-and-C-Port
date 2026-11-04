@@ -31,10 +31,10 @@
  *      PCB's);
  *  (e) bz_app_init / bz_app_step / bz_app_exit.
  *
- * MAIN's two spin loops.  "L5000 LSR SYNC / BCC MAIN" is hw_wait_frame()
- * (the NMI bumps SYNC once per 16 NMIs); MAIN_5's "LDX BUFRDY / BEQ MAIN_5",
- * after JSR VOLCNO, is hw_wait_bufrdy() - both spin a RAM cell only the NMI
- * sets, so they service NMIs until it changes, charging the loop's cycles.
+ * MAIN's two spin loops: hw_wait_frame() waits for SYNC (the NMI bumps it
+ * once per 16 NMIs) and hw_wait_bufrdy(), after VOLCNO, waits for BUFRDY.
+ * Both poll a RAM cell only the NMI sets, so they service NMIs until it
+ * changes, charging the loop's cycles.
  */
 #include <math.h>
 #include <setjmp.h>
@@ -370,8 +370,8 @@ static void nmi_service(void)
     next_nmi += BZ_NMI_CYCLES;
     /* The board gates the NMI with the self-test switch (MAME bzone.cpp
      * bzone_interrupt: NMI only while IN0 b4 is high, i.e. the switch is
-     * OFF).  With it on the game's NMI would swap display buffers (EOR
-     * VECRAM+1) and restart the AVG over the self test's own list at $2000 -
+     * OFF).  With it on the game's NMI would swap display buffers (the JMP
+     * at VECRAM+1) and restart the AVG over the self test's own list at $2000 -
      * user report: "correct screen for a second, then a scribble" (the
      * first swap comes 256 NMIs after PWRON clears VTIMER).  The grid and
      * the audio tick keep running. */
@@ -428,32 +428,30 @@ static void machine_tick(void)
     }
 }
 
-/* MAIN's frame wait ($5000 LSR SYNC / L5002 BCC MAIN): each spin is the ROM's
- * own LSR (5) + BCC (3 taken, 2 on the way out); between spins the NMI the
- * wall clock says is due is serviced (machine_tick). */
+/* MAIN's frame wait ($5000-$5002): each poll consumes one frame marker from
+ * SYNC (8 cycles per empty poll, 7 for the one that finds a frame); between
+ * polls the NMI the wall clock says is due is serviced (machine_tick). */
 void hw_wait_frame(void)
 {
     for (;;) {
-        unsigned c = SYNC & 1u;  /* L5000 LSR SYNC */
-        SYNC = (uint8_t)(SYNC >> 1);
-        spend(5);
-        if (c) {
-            spend(2);  /* L5002 BCC MAIN, not taken */
+        int frame_ready = SYNC & 1u;
+        SYNC /= 2;
+        if (frame_ready) {
+            spend(7);
             break;
         }
-        spend(3);                    /* BCC taken */
+        spend(8);
         machine_tick();
     }
 }
 
-/* MAIN_5's BUFRDY spin ($5007 LDX BUFRDY / $5009 BEQ MAIN_5), after JSR
- * VOLCNO as on the board: LDX (3) + BEQ (3 taken, 2 on the way out). */
+/* MAIN_5's wait for the NMI to hand over a display buffer ($5007-$5009),
+ * after VOLCNO as on the board: 6 cycles per empty poll, 5 for the last. */
 void hw_wait_bufrdy(void)
 {
     for (;;) {
-        spend(3);                           /* L5007 LDX BUFRDY */
-        if (BUFRDY != 0) { spend(2); break; }  /* L5009 BEQ, not taken */
-        spend(3);                           /* BEQ taken */
+        if (BUFRDY != 0) { spend(5); break; }
+        spend(6);
         machine_tick();
     }
 }
@@ -536,7 +534,7 @@ double bz_app_step(double now_ms)
      * the board you flip it and power-cycle.  Host affordance (MAME's F2 +
      * reset): switching it ON during the game reboots through PWRON, which
      * then enters the self test.  Switching it OFF in the self test needs
-     * nothing here: the ROM's own STEST7 sees it and does JMP PWRON. */
+     * nothing here: the ROM's own STEST7 sees it and restarts at PWRON. */
     if (cur_in.test && !last_test && !in_selftest) {
         in_selftest = (pwron() != 0);
         if (!in_selftest) main_init();
@@ -554,7 +552,7 @@ double bz_app_step(double now_ms)
     } else {
         wd_armed = 1;
         if (in_selftest) {
-            if (selftest_pass()) {  /* 1 = the ROM did "JMP PWRON" */
+            if (selftest_pass()) {  /* 1 = the ROM restarts at PWRON */
                 in_selftest = (pwron() != 0);
                 if (!in_selftest) main_init();
             }

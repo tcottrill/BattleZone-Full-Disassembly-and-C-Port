@@ -17,7 +17,19 @@
 #define BZONE_MATH_H
 
 #include <stdint.h>
-#include "regs.h"
+
+/* A sine or cosine sample: the trig table's signed 16-bit fixed-point
+ * value (high byte = whole part, low byte = fraction).  `wrapped` is 1 when
+ * producing the sample wrapped its 16-bit arithmetic (negating a zero
+ * sample, or an interpolation that overflowed); ROTATE adds it back after
+ * negating the sample, which the picture depends on. */
+typedef struct {
+    int16_t value;
+    uint8_t wrapped;
+} trig_sample;
+
+static inline uint8_t trig_low(trig_sample t)  { return (uint8_t)t.value; }
+static inline int8_t  trig_high(trig_sample t) { return (int8_t)((uint16_t)t.value >> 8); }
 
 /* Integration fix (2026-09-18, NOTES_integration.md): COS/SIN are named
  * `cos_`/`sin_` below, not the bare `cos`/`sin` SIGNATURES.md's naming rule
@@ -76,34 +88,29 @@ void kludge(void);
  * toward zero, once per call.  No inputs, no return. */
 void bound(void);
 
-/* COS ($5E4B): COS(a) = SIN(a + $40) (quarter-turn phase shift), then falls
- * into SIN.  In: a = angle (0..$FF = 0..360 degrees).  Returns: r.a = low
- * byte, r.x = high byte of the cosine (both consumed by every real caller -
- * ROTATE, PNTPUT, COSXTR).  Named `cos_` (trailing underscore), not the
- * bare ROM-label-derived `cos` - see the integration-fix comment above. */
-regs cos_(uint8_t a);
+/* COS ($5E4B): COS(angle) = SIN(angle + $40) (quarter-turn phase shift).
+ * angle: 0..$FF = 0..360 degrees.  Named `cos_` (trailing underscore), not
+ * the bare `cos` - see the integration-fix comment above. */
+trig_sample cos_(uint8_t angle);
 
-/* SIN ($5E4E): sine of an 8-bit angle. In: a = angle.  Returns: r.a = low
- * byte, r.x = high byte.  Named `sin_` for the same reason as `cos_` above. */
-regs sin_(uint8_t a);
+/* SIN ($5E4E): sine of an 8-bit angle.  Named `sin_` for the same reason as
+ * `cos_` above. */
+trig_sample sin_(uint8_t angle);
 
-/* SIN1 ($5E63): SIN(a) for 0 <= a < $80 (folds the second quadrant via
- * EOR #$7F).  In: a.  Returns: r.a = low byte, r.x = high byte, read from
- * the 65-entry table at its real ROM address $5E77 (SIN1_99 in this
- * disassembly's naming) - CALLING_NOTES.md section 3: the ROM source
+/* SIN1 ($5E63): SIN(angle) for 0 <= angle < $80 (folds the second quadrant),
+ * read from the 65-entry table at its real ROM address $5E77 (SIN1_99 in
+ * this disassembly's naming) - CALLING_NOTES.md section 3: the ROM source
  * indexes this table by a self-relative local label, not a plain symbol;
  * a C port has no equivalent and must use the real address. */
-regs sin1(uint8_t a);
+trig_sample sin1(uint8_t angle);
 
-/* COSXTR ($5EF9): extrapolate COS between the SIN1 table's angle steps.
- * In: x = angle, a = division of angle (only bit 0 used: 0 or 1).
- * Returns: r.a = low byte, r.x = high byte.  Also writes GARBAG (RAM
- * scratch - Atari's own header note, "GARBAG"). */
-regs cosxtr(uint8_t a, uint8_t x);
+/* COSXTR ($5EF9): COS at a half-step angle: fraction bit 0 set means
+ * halfway between angle and angle+1.  Also writes GARBAG (RAM scratch -
+ * Atari's own header note, "GARBAG"). */
+trig_sample cosxtr(uint8_t fraction, uint8_t angle);
 
-/* SINXTR ($5F17): SIN counterpart of COSXTR - same entry/exit shape,
- * shares the XTRAP interpolation tail. */
-regs sinxtr(uint8_t a, uint8_t x);
+/* SINXTR ($5F17): SIN counterpart of COSXTR. */
+trig_sample sinxtr(uint8_t fraction, uint8_t angle);
 
 /* ABSTMP ($6149): TEMP1/TEMP1+1 := |TEMP1/TEMP1+1| (16-bit absolute value).
  * No inputs/return (RAM in, RAM out; no caller reads A afterward). */

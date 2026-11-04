@@ -25,12 +25,9 @@ typedef struct {
     uint32_t pass_count;    /* MAIN passes since reset                       */
     uint32_t stray_writes;  /* cpu_wr() outside RAM/vector RAM               */
 
-    /* ---- CPU facts that outlive one routine (future milestones) ---------- */
-    uint8_t  dflag;           /* the 6502 D flag: BZONE.MAC brackets the HITS
-                                  (score) BCD adds with SED/CLD, and COIN65's
-                                  math is always CLD first (CPORT_READINESS.md,
-                                  "Decimal (BCD) mode").  adc6502/sbc6502 below
-                                  honour it; not used until M3+ translates HITS. */
+    /* Reference-harness bookkeeping; native score arithmetic is explicit
+     * decimal arithmetic and does not consult CPU flags. */
+    uint8_t  dflag;
 } machine_state;
 
 extern machine_state g;
@@ -51,50 +48,6 @@ extern machine_state g;
  * reachable this way - translated code calls the hw_* seam for those. */
 uint8_t cpu_rd(uint16_t addr);
 void    cpu_wr(uint16_t addr, uint8_t v);
-
-/* ---- 6502 ADC / SBC with the NMOS decimal mode (g.dflag) ----------------
- * Bit-for-bit the shared core's op_adc/op_sbc (C:\Source2026\shared\ref6502),
- * copied from the Tempest port's state.h: decimal ADC takes Z from the binary
- * sum; SBC flags are always binary.  *c is the carry in and out; *z (may be
- * NULL) receives the Z flag.  Not exercised until a routine that runs in
- * decimal mode (HITS, the score) is translated - kept here now so state.h
- * matches the template and needs no interface change later. */
-static inline uint8_t adc6502(uint8_t a, uint8_t v, unsigned *c, int *z)
-{
-    unsigned cin = *c ? 1u : 0u;
-    if (g.dflag) {
-        unsigned al = (a & 0x0Fu) + (v & 0x0Fu) + cin;
-        unsigned t;
-        if (al >= 0x0A) al = ((al + 0x06) & 0x0F) + 0x10;
-        t = (a & 0xF0u) + (v & 0xF0u) + al;
-        if (z) *z = (uint8_t)(a + v + cin) == 0;
-        if (t >= 0xA0) t += 0x60;
-        *c = t >= 0x100;
-        return (uint8_t)t;
-    } else {
-        unsigned sum = (unsigned)a + v + cin;
-        *c = sum > 0xFF;
-        if (z) *z = (uint8_t)sum == 0;
-        return (uint8_t)sum;
-    }
-}
-
-static inline uint8_t sbc6502(uint8_t a, uint8_t v, unsigned *c, int *z)
-{
-    int cin = *c ? 1 : 0;
-    int bin = (int)a - (int)v - (1 - cin);
-    *c = bin >= 0;
-    if (z) *z = (uint8_t)bin == 0;
-    if (g.dflag) {
-        int al = (int)(a & 0x0F) - (int)(v & 0x0F) - (1 - cin);
-        int t;
-        if (al < 0) al = ((al - 0x06) & 0x0F) - 0x10;
-        t = (int)(a & 0xF0) - (int)(v & 0xF0) + al;
-        if (t < 0) t -= 0x60;
-        return (uint8_t)(t & 0xFF);
-    }
-    return (uint8_t)bin;
-}
 
 /* ---- unnamed cells (none yet) ------------------------------------------- */
 

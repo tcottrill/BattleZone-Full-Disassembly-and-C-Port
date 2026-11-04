@@ -14,7 +14,6 @@
 #define BZONE_DISP_H
 
 #include <stdint.h>
-#include "regs.h"
 #include "bzone_game.h"   /* pass_signal, for wnshld_body()/ckscor_body()/hiscre_body()/
                             * distbl_body() below - see bzone_game.h's own comment
                             * ("Integration fix... trampoline") for the full design;

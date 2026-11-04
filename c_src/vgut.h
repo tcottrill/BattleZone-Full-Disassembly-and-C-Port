@@ -4,13 +4,9 @@
  * other modules include this header to call these routines; do not
  * re-prototype them locally.
  *
- * Signatures follow SIGNATURES.md's rule: inputs actually read from A/X/Y/
- * carry become parameters in (a, x, y, c) order, keeping only the ones read;
- * a single documented output becomes the return value (carry as plain
- * `int`); everything else (VGLIST, VGBRIT, XCOMP, the display buffer itself)
- * goes through RAM (state_defs.h) / vector RAM exactly as the ROM does it -
- * no routine here has more than one register output, so `regs` (regs.h) is
- * not needed for this module.
+ * Inputs become parameters and a result becomes the return value;
+ * everything else (VGLIST, VGBRIT, XCOMP, the display buffer itself) goes
+ * through RAM (state_defs.h) / vector RAM exactly as the ROM does it.
  *
  * Full ENTRY/EXIT/USES documentation and the Lxxxx-commented translation are
  * in vgut.c; this header only states the calling contract.
@@ -29,16 +25,16 @@ void vgrtsl(void);
 void vghalt(void);
 
 /* VGHEXZ ($7A29): display one BCD digit with zero suppression.
- * In: a = the digit (low 4 bits used); c = 1 to suppress a leading zero.
- * Returns: the carry to pass to the next VGHEXZ in a chain - 1 means "still
+ * digit: low 4 bits used; suppress = 1 to show a leading zero as blank.
+ * Returns the suppress flag for the next digit in a chain - 1 means "still
  * suppressing" (a zero was shown as blank), 0 means a non-zero digit showed
  * (from here on nothing more is suppressed). Reads/writes VGLIST, VGBRIT
  * untouched. */
-int vghexz(uint8_t a, int c);
+int vghexz(uint8_t digit, int suppress);
 
-/* VGHEX ($7A2F): display one BCD digit, no suppression.
- * In: a = the digit (low 4 bits used). Returns: carry, always 0. */
-int vghex(uint8_t a);
+/* VGHEX ($7A2F): display one BCD digit, no suppression (digit: low 4 bits
+ * used).  Returns the suppress flag for a following digit, always 0. */
+int vghex(uint8_t digit);
 
 /* VGJMPL ($7A49): append a JMPL word to CPU address a:x (MSB:LSB), 13-bit
  * AVG address space. No return. Dead code in this ROM (never called). */

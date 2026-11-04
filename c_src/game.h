@@ -1,8 +1,8 @@
 /* game.h - entry points of the translated Battlezone program ROM.
  *
  * One C function per Atari label, lowercased ($ -> s_), ROM address in a
- * comment.  Register protocol: A/X/Y/carry inputs become parameters,
- * documented outputs become return values (carry = int).  Modelled on the
+ * comment.  Inputs become parameters and results become return values
+ * (TRANSLATING.md).  Modelled on the
  * Tempest port's game.h (C:\Source2026\Tempest Dissasembly\c_src\game.h).
  *
  * Status: VGUT (M1) translated and lockstep-verified.

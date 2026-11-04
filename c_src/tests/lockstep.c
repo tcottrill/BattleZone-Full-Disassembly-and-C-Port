@@ -750,7 +750,7 @@ static void run_vgvtr2(void) { vgvtr2(); }
 static void run_vgvctr(void) { vgvctr(R.x); }
 
 /* ---- nmi-sound-coin (bzsoun.c/coin65.c/bzone_nmi.c) --------------------- */
-static void run_sndon(void)  { sndon(R.a, R.x); }
+static void run_sndon(void)  { sndon(R.a); }
 static void run_modsnd(void) { modsnd(); }
 static void run_moolah(void) { moolah(); }
 static void run_nmi(void)    { nmi(); }
@@ -762,11 +762,14 @@ static void run_rotpnt(void)  { ret_y = rotpnt(R.y); }
 static void run_pntput(void)  { pntput(R.x); }
 static void run_kludge(void)  { kludge(); }
 static void run_bound(void)   { bound(); }
-static void run_cos(void)     { regs r = cos_(R.a);   ret_a = r.a; ret_x = r.x; ret_c = r.c; }
-static void run_sin(void)     { regs r = sin_(R.a);   ret_a = r.a; ret_x = r.x; ret_c = r.c; }
-static void run_sin1(void)    { regs r = sin1(R.a);   ret_a = r.a; ret_x = r.x; ret_c = r.c; }
-static void run_cosxtr(void)  { regs r = cosxtr(R.a, R.x); ret_a = r.a; ret_x = r.x; ret_c = r.c; }
-static void run_sinxtr(void)  { regs r = sinxtr(R.a, R.x); ret_a = r.a; ret_x = r.x; ret_c = r.c; }
+/* The ROM returns a trig sample as A = low byte, X = high byte, and the
+ * carry flag as its wrap bit. */
+static void ret_trig(trig_sample t) { ret_a = trig_low(t); ret_x = (uint8_t)trig_high(t); ret_c = t.wrapped; }
+static void run_cos(void)     { ret_trig(cos_(R.a)); }
+static void run_sin(void)     { ret_trig(sin_(R.a)); }
+static void run_sin1(void)    { ret_trig(sin1(R.a)); }
+static void run_cosxtr(void)  { ret_trig(cosxtr(R.a, R.x)); }
+static void run_sinxtr(void)  { ret_trig(sinxtr(R.a, R.x)); }
 static void run_abstmp(void)  { abstmp(); }
 static void run_track(void)   { ret_a = track(); }
 static void run_t_0(void)     { ret_a = t_0(R.a); }
@@ -832,7 +835,7 @@ static void run_fireit(void)  { fireit(); }
 /* ---- enemy (bzone_enemy.c) ---- */
 static void run_buzbom(void)  { buzbom(); }
 static void run_saucmv(void)  { saucmv(); }
-static void run_objobj(void)  { regs r = objobj(R.x); ret_a = r.a; ret_c = r.c; }
+static void run_objobj(void)  { object_contact r = objobj(R.x); ret_a = r.kind; ret_c = r.touching != 0; }
 static void run_robchk(void)  { robchk(); }
 static void run_tankck(void)  { tankck(); }
 static void run_r2d3ck(void)  { r2d3ck(); }

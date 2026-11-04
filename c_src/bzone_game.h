@@ -7,17 +7,20 @@
  * BUZBOM ($6624), SAUCMV ($677C), OBJOBJ ($68D6), TR7CHK ($69B5),
  * ROBCHK ($69BE), TANKCK ($69E8), R2D3CK ($6A22), ROB1.
  *
- * Register protocol per SIGNATURES.md: A/X/Y/carry inputs the routine
- * actually reads become parameters; documented/consumed outputs become the
- * return value (a plain type, or `regs` from regs.h when more than one
- * register/flag is consumed by a caller).  Everything else lives in
- * state_defs.h RAM cells, exactly as the ROM does it.
+ * Inputs a routine reads become parameters and the results its callers use
+ * become the return value.  Everything else lives in state_defs.h RAM
+ * cells, as in the ROM.
  */
 #ifndef BZONE_GAME_H
 #define BZONE_GAME_H
 
 #include <stdint.h>
-#include "regs.h"
+
+/* An object-object collision test's result (OBJOBJ). */
+typedef struct {
+    int touching;  /* the tank is in contact with an obstacle or a tank */
+    uint8_t kind;  /* 0 = obstacle, $FF = tank, otherwise explosion flags */
+} object_contact;
 
 /* ---- MAIN ($5000-$51D8) --------------------------------------------------
  * main_init(): BZSTST's one-time setup this module owns (none yet - BZSTST
@@ -96,9 +99,9 @@ void b_end(void);
 uint8_t explde(uint8_t y);
 
 /* ---- QWIKCK/SHRTCK ($5F4E/$5F5B) - shell/tank collision check.
- * qwikck(): player's shell vs. robot only, no arguments (hardwires X=0,Y=2).
+ * qwikck(): player's shell vs. robot only (shooter 0, target 2).
  * shrtck(x,y): either shell-vs-tank pair; x/y select whose shell/target.
- * Both return carry: 0 = no collision, 1 = collision (flags/counters set). */
+ * Both return 1 on a collision (flags/counters set), else 0. */
 int qwikck(void);
 int shrtck(uint8_t x, uint8_t y);
 
@@ -211,13 +214,12 @@ void buzbom(void);
  * the maths agent's). */
 void saucmv(void);
 
-/* ---- OBJOBJ ($68D6) - object-object collision detect.  X = 0 player tank,
- * 2 robot tank.  Returns carry set on collision (regs.c/.a: c=carry,
- * a=0 non-tank / -1 ($FF) tank; carry clear = no collision). */
-regs objobj(uint8_t x);
+/* ---- OBJOBJ ($68D6) - object-object collision detect.  tank = 0 player
+ * tank, 2 robot tank. */
+object_contact objobj(uint8_t tank);
 
-/* ---- TR7CHK ($69B5) - TR7 tank variant branch.  Returns carry (see
- * B_END_19's BCC at MAIN's tail). */
+/* ---- TR7CHK ($69B5) - TR7 tank variant branch.  Returns 1 for the TR7
+ * variant (MAIN's tail at B_END_19 branches on it). */
 int tr7chk(void);
 
 /* ---- ROBCHK ($69BE) - robot reset check; shared with the NMI handler
