@@ -15,6 +15,20 @@ own — none is included) on a 6502 core behind the very same window, beam
 renderer, sound, controls and chip models as the port, so the original and
 the translation can be played side by side.
 
+> **New version (2026-11-04).** This release corrects some AI cheating in the
+> first C port: parts of it reused 6502 emulation instead of being real C.
+> There were add/subtract-with-carry helpers copied from a 6502 core
+> (decimal mode included), register and flag variables, a 6502
+> register struct returned from routines, and code that followed the ROM
+> instruction by instruction. The whole port is now plain C game logic —
+> coordinates, angles, collision tests, decimal scores — with no CPU
+> registers, flags or stack in the game code. It still charges the ROM's
+> exact cycle count on every path, and the call-by-call verifier confirms
+> the same RAM, display and hardware effects as the real ROM. The rewrite
+> also found and fixed a small bug in the sound-start routine. See
+> [`c_src/TRANSLATING.md`](c_src/TRANSLATING.md) for the rules the code now
+> follows.
+
 <p align="center">
   <img src="docs/images/cport_play.png" width="480"
        alt="bz_win.exe, the C port: an enemy tank on the horizon, the radar and ENEMY IN RANGE">
